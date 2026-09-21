@@ -108,6 +108,11 @@
           "type": "number",
           "default": 1080,
           "markdownDescription": "`stream` 모드에서 인코딩할 화면의 긴 변 상한(픽셀). 기기에서 미리 줄여 보내므로 전송량과 디코딩 부하가 크게 준다. 사이드바 폭보다 넉넉하면 화질 차이는 느껴지지 않는다. 0이면 줄이지 않는다."
+        },
+        "androidPanel.stayAwake": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "`stream` 모드에서 충전 중 기기가 잠들지 않게 한다(`stay_on_while_plugged_in`). 화면 시간 제한 때문에 기기가 잠드는 환경에서만 필요하다. 기기의 전역 설정을 바꾸므로 기본은 꺼둔다."
         }
       }
     }

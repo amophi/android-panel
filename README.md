@@ -51,6 +51,7 @@ is convenient while developing.
 | `androidPanel.maxSize` | `1080` | `stream` mode: cap the encoded frame's long edge. 0 encodes at full resolution |
 | `androidPanel.maxFps` | `0` | `stream` mode frame cap; 0 is unlimited |
 | `androidPanel.keepStreamWhenHidden` | `true` | Keep the stream running while the view is hidden |
+| `androidPanel.stayAwake` | `false` | Ask the server to keep the device awake while charging |
 | `androidPanel.package` | *(empty)* | Package launched when the panel opens. Empty mirrors whatever is on screen |
 | `androidPanel.intervalMs` | `600` | Capture interval in milliseconds |
 | `androidPanel.serial` | *(empty)* | Device serial. Empty picks automatically, preferring physical devices over emulators |
@@ -107,6 +108,16 @@ display `maxSize: 1080` yields 498x1080 — still sharper than the panel is wide
 
 Scaling separates two coordinate spaces: the video is 498x1080 but `input tap` still expects display
 coordinates. The panel asks the device with `wm size -d <id>` rather than reusing the video size.
+
+## Cleaning up after itself
+
+Killing the local `adb shell` does not kill the server process on the device. A leaked server keeps
+its virtual display alive, and the next run then launches the app onto a *different* display while
+the panel streams the stale one — the symptom is a panel showing an empty secondary launcher.
+
+The client therefore kills its own server by `scid` on shutdown, and sweeps any orphaned servers and
+`scrcpy_*` reverse tunnels on startup. A health check every eight seconds confirms the display still
+exists and the configured package is still on top of it, restarting or relaunching if not.
 
 ## Behaviour notes
 

@@ -12,6 +12,7 @@
 //   PTS 상위 비트: bit62 = 설정 패킷(SPS/PPS), bit61 = 키프레임
 
 const net = require('net');
+const crypto = require('crypto');
 const { EventEmitter } = require('events');
 const { execFile, spawn } = require('child_process');
 
@@ -21,6 +22,7 @@ const FRAME_HEADER_LEN = 12;
 const FLAG_CONFIG = 0x40000000; // PTS 상위 32비트에서 본 값
 const FLAG_KEY = 0x20000000;
 const REMOTE_JAR = '/data/local/tmp/scrcpy-server.jar';
+const SERVER_CLASS = 'com.genymobile.scrcpy.Server';
 const MAX_PACKET = 16 * 1024 * 1024;
 
 class ScrcpyStream extends EventEmitter {
@@ -32,6 +34,8 @@ class ScrcpyStream extends EventEmitter {
    * @param {string} o.version       scrcpy 버전 문자열 (서버 jar 과 일치해야 한다)
    * @param {string} o.newDisplay    예: "1440x3120/560". 비우면 기기 본체 화면을 비춘다
    * @param {number} o.maxFps        0이면 제한 없음
+   * @param {number} o.maxSize       인코딩 긴 변 상한. 화면을 줄여 보내 부하를 낮춘다
+   * @param {boolean} o.stayAwake    충전 중 기기가 잠들지 않게 한다
    */
   constructor(o) {
     super();
@@ -57,9 +61,25 @@ class ScrcpyStream extends EventEmitter {
     );
   }
 
+  /**
+   * 앞선 실행이 남긴 서버와 터널을 걷어낸다.
+   * 서버가 살아 있으면 쓰이지 않는 가상 디스플레이가 계속 남고, 다음 실행에서
+   * 앱이 엉뚱한 디스플레이로 올라가 패널이 빈 보조 런처를 비추게 된다.
+   */
+  async cleanupOrphans() {
+    await this.exec(['shell', 'pkill', '-f', SERVER_CLASS]).catch(() => {});
+    const list = await this.exec(['reverse', '--list']).catch(() => '');
+    for (const line of String(list).split('\n')) {
+      const m = /localabstract:(scrcpy_[0-9a-f]+)/.exec(line);
+      if (m) await this.exec(['reverse', '--remove', 'localabstract:' + m[1]]).catch(() => {});
+    }
+  }
+
   async start() {
+    await this.cleanupOrphans();
+
     // 서버가 Integer.parseInt(scid, 16) 으로 읽으므로 부호 있는 32비트를 넘으면 안 된다.
-    const n = require('crypto').randomBytes(4).readUInt32BE(0) & 0x7fffffff;
+    const n = crypto.randomBytes(4).readUInt32BE(0) & 0x7fffffff;
     this.scid = n.toString(16).padStart(8, '0');
 
     await this.exec(['push', this.o.serverPath, REMOTE_JAR]);
@@ -73,7 +93,7 @@ class ScrcpyStream extends EventEmitter {
     const args = [
       '-s', this.o.serial, 'shell',
       `CLASSPATH=${REMOTE_JAR}`,
-      'app_process', '/', 'com.genymobile.scrcpy.Server', this.o.version,
+      'app_process', '/', SERVER_CLASS, this.o.version,
       `scid=${this.scid}`,
       'log_level=info',
       'audio=false',   // 회사에서 쓰므로 소리는 절대 넘기지 않는다
@@ -82,6 +102,7 @@ class ScrcpyStream extends EventEmitter {
     if (this.o.newDisplay) args.push(`new_display=${this.o.newDisplay}`);
     if (this.o.maxFps) args.push(`max_fps=${this.o.maxFps}`);
     if (this.o.maxSize) args.push(`max_size=${this.o.maxSize}`);
+    if (this.o.stayAwake) args.push('stay_awake=true');
 
     this.proc = spawn(this.o.adb, args, { windowsHide: true });
     this.proc.stdout.on('data', (d) => this.onServerLog(String(d)));
@@ -148,6 +169,9 @@ class ScrcpyStream extends EventEmitter {
     try { if (this.server) this.server.close(); } catch (_) {}
     try { if (this.proc) this.proc.kill(); } catch (_) {}
     if (this.scid) {
+      // adb shell 을 죽여도 기기 쪽 서버는 살아남는다. 직접 끝내야 가상
+      // 디스플레이가 사라진다.
+      await this.exec(['shell', 'pkill', '-f', `scid=${this.scid}`]).catch(() => {});
       await this.exec(['reverse', '--remove', `localabstract:scrcpy_${this.scid}`]).catch(() => {});
     }
   }

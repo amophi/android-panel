@@ -18,6 +18,7 @@ function config() {
     newDisplay: (c.get('newDisplay') || '').trim(),
     maxFps: c.get('maxFps') || 0,
     maxSize: c.get('maxSize') || 0,
+    stayAwake: c.get('stayAwake') === true,
     keepAlive: c.get('keepStreamWhenHidden') !== false,
   };
 }
@@ -85,6 +86,7 @@ class ScreenView {
     this.displayId = null; // 가상 디스플레이. null이면 기기 본체 화면
     this.configPacket = null;
     this.started = false;
+    this.health = null;
   }
 
   resolveWebviewView(view) {
@@ -137,6 +139,10 @@ class ScreenView {
       clearTimeout(this.timer);
       this.timer = null;
     }
+    if (this.health) {
+      clearInterval(this.health);
+      this.health = null;
+    }
     if (this.stream) {
       this.stream.stop().catch(() => {});
       this.stream = null;
@@ -160,6 +166,7 @@ class ScreenView {
       newDisplay: c.newDisplay || null,
       maxFps: c.maxFps,
       maxSize: c.maxSize,
+      stayAwake: c.stayAwake,
     });
     this.stream = s;
 
@@ -195,6 +202,8 @@ class ScreenView {
     try {
       await s.start();
       this.status(`${this.serial} · 연결 중...`);
+      // 디스플레이가 사라지거나 앱이 밀려나는 일이 있어 주기적으로 확인한다.
+      this.health = setInterval(() => this.healthCheck(), 8000);
     } catch (e) {
       this.started = false;
       this.status('스트림을 시작하지 못했습니다: ' + e.message, 'error');
@@ -216,6 +225,31 @@ class ScreenView {
       if (m) this.post({ type: 'size', w: Number(m[1]), h: Number(m[2]) });
     } catch (_) {
       /* 다음 기회에 */
+    }
+  }
+
+  /**
+   * 스트림은 살아 있는데 화면만 멈추는 경우가 있다. 가상 디스플레이가
+   * 사라졌거나, 다른 앱이 그 디스플레이를 차지한 경우다. 주기적으로 확인해
+   * 스스로 되돌린다.
+   */
+  async healthCheck() {
+    if (!this.started || this.displayId === null || !this.stream) return;
+    const c = config();
+    try {
+      const disp = await adb(c.adb, ['-s', this.serial, 'shell', 'dumpsys', 'display']);
+      if (disp.indexOf('displayId=' + this.displayId + ',') < 0) {
+        this.status('화면이 사라져 다시 연결합니다', 'error');
+        this.stop();
+        this.start();
+        return;
+      }
+      if (!c.pkg) return;
+      const acts = await adb(c.adb, ['-s', this.serial, 'shell', 'dumpsys', 'activity', 'activities']);
+      const at = acts.indexOf('Display #' + this.displayId + ' ');
+      if (at >= 0 && acts.slice(at, at + 800).indexOf(c.pkg) < 0) await this.launch();
+    } catch (_) {
+      /* 다음 주기에 다시 본다 */
     }
   }
 
