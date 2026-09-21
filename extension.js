@@ -1,16 +1,22 @@
 const vscode = require('vscode');
 const crypto = require('crypto');
 const { execFile } = require('child_process');
+const { ScrcpyStream, codecStringFromConfig } = require('./scrcpy');
 
 const VIEW_ID = 'androidPanel.screen';
 
 function config() {
   const c = vscode.workspace.getConfiguration('androidPanel');
   return {
+    mode: c.get('mode') || 'stream',
     adb: c.get('adbPath') || 'adb',
     pkg: (c.get('package') || '').trim(),
     interval: Math.max(150, c.get('intervalMs') || 600),
     serial: (c.get('serial') || '').trim(),
+    serverPath: (c.get('scrcpyServerPath') || '').trim(),
+    version: (c.get('scrcpyVersion') || '4.1').trim(),
+    newDisplay: (c.get('newDisplay') || '').trim(),
+    maxFps: c.get('maxFps') || 0,
   };
 }
 
@@ -20,18 +26,13 @@ function adb(bin, args, { binary = false, timeout = 20000 } = {}) {
     execFile(
       bin,
       args,
-      {
-        encoding: binary ? 'buffer' : 'utf8',
-        maxBuffer: 64 * 1024 * 1024,
-        timeout,
-        windowsHide: true,
-      },
+      { encoding: binary ? 'buffer' : 'utf8', maxBuffer: 64 * 1024 * 1024, timeout, windowsHide: true },
       (err, stdout) => (err ? reject(err) : resolve(stdout))
     );
   });
 }
 
-/** 에뮬레이터가 같이 붙어 있을 수 있으므로 실물 기기를, 패키지가 지정되면 그게 깔린 기기를 고른다. */
+/** 에뮬레이터가 같이 붙어 있을 수 있으므로, 패키지가 지정되면 그게 깔린 기기를 고른다. */
 async function pickSerial(bin, pkg) {
   const out = await adb(bin, ['devices']);
   const ready = out
@@ -54,7 +55,17 @@ async function pickSerial(bin, pkg) {
   return ready[0];
 }
 
-/** PNG 헤더에서 실제 화면 해상도를 읽는다. 클릭 좌표를 되돌릴 때 쓴다. */
+/** 패키지의 실행 액티비티를 찾는다. 가상 디스플레이로 띄우려면 컴포넌트 이름이 필요하다. */
+async function launcherActivity(bin, serial, pkg) {
+  const out = await adb(bin, [
+    '-s', serial, 'shell', 'cmd', 'package', 'resolve-activity',
+    '--brief', '-c', 'android.intent.category.LAUNCHER', pkg,
+  ]);
+  const line = out.split(/\r?\n/).map((s) => s.trim()).filter(Boolean).pop();
+  return line && line.includes('/') ? line : null;
+}
+
+/** PNG 헤더에서 실제 화면 해상도를 읽는다. screencap 모드에서 클릭 좌표를 되돌릴 때 쓴다. */
 function pngSize(buf) {
   if (!buf || buf.length < 24 || buf.readUInt32BE(0) !== 0x89504e47) return null;
   return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) };
@@ -67,15 +78,17 @@ class ScreenView {
     this.timer = null;
     this.serial = null;
     this.lastHash = '';
-    this.size = null;
     this.busy = false;
+    this.stream = null;
+    this.displayId = null; // 가상 디스플레이. null이면 기기 본체 화면
+    this.configPacket = null;
+    this.started = false;
   }
 
   resolveWebviewView(view) {
     this.view = view;
     view.webview.options = { enableScripts: true };
     view.webview.html = this.html(view.webview);
-
     view.webview.onDidReceiveMessage((m) => this.onMessage(m));
     view.onDidChangeVisibility(() => (view.visible ? this.start() : this.stop()));
     view.onDidDispose(() => this.stop());
@@ -91,56 +104,123 @@ class ScreenView {
   }
 
   async start() {
-    if (this.timer) return;
-    this.lastHash = '';
-    const { adb: bin, pkg } = config();
+    if (this.started) return;
+    this.started = true;
+    const c = config();
     this.status('기기를 찾는 중...');
     try {
-      const wanted = config().serial;
-      this.serial = wanted || (await pickSerial(bin, pkg));
-    } catch (e) {
-      this.status('adb를 실행하지 못했습니다. 설정에서 경로를 확인하세요.', 'error');
-      return;
+      this.serial = c.serial || (await pickSerial(c.adb, c.pkg));
+    } catch (_) {
+      this.started = false;
+      return this.status('adb를 실행하지 못했습니다. 설정에서 경로를 확인하세요.', 'error');
     }
     if (!this.serial) {
-      this.status('연결된 기기가 없습니다. USB를 확인하세요.', 'error');
-      return;
+      this.started = false;
+      return this.status('연결된 기기가 없습니다. USB를 확인하세요.', 'error');
     }
-    this.status(this.serial);
-    if (pkg) this.launch().catch(() => {});
-    this.tick();
+    this.post({ type: 'mode', mode: c.mode });
+    if (c.mode === 'stream') await this.startStream(c);
+    else this.startCapture();
   }
 
   stop() {
+    this.started = false;
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
     }
+    if (this.stream) {
+      this.stream.stop().catch(() => {});
+      this.stream = null;
+    }
+    this.displayId = null;
+    this.configPacket = null;
+  }
+
+  // ---------- stream 모드: 가상 디스플레이 + H.264 ----------
+
+  async startStream(c) {
+    if (!c.serverPath) {
+      this.started = false;
+      return this.status('scrcpyServerPath 설정이 필요합니다.', 'error');
+    }
+    const s = new ScrcpyStream({
+      adb: c.adb,
+      serverPath: c.serverPath,
+      serial: this.serial,
+      version: c.version,
+      newDisplay: c.newDisplay || null,
+      maxFps: c.maxFps,
+    });
+    this.stream = s;
+
+    s.on('display', async (id) => {
+      this.displayId = id;
+      if (c.pkg) await this.launch();
+    });
+    s.on('meta', (m) => {
+      this.post({ type: 'size', w: m.width, h: m.height });
+      this.status(`${this.serial} · ${m.width}x${m.height}`);
+    });
+    s.on('packet', (p) => {
+      if (p.type === 'config') {
+        this.configPacket = p.data;
+        this.post({ type: 'config', codec: codecStringFromConfig(p.data) });
+        return;
+      }
+      // 설정 패킷은 키프레임 앞에 붙여 보낸다. 디코더가 따로 받으면 처리하기 까다롭다.
+      const body =
+        p.type === 'key' && this.configPacket
+          ? Buffer.concat([this.configPacket, p.data])
+          : p.data;
+      this.post({ type: 'chunk', key: p.type === 'key', data: body.toString('base64') });
+    });
+    s.on('log', (t) => this.status(t.split('\n')[0].slice(0, 120), 'error'));
+    s.on('closed', (why) => {
+      if (!this.started) return;
+      this.status(why || '스트림이 끊겼습니다', 'error');
+      this.started = false;
+    });
+
+    try {
+      await s.start();
+      this.status(`${this.serial} · 연결 중...`);
+    } catch (e) {
+      this.started = false;
+      this.status('스트림을 시작하지 못했습니다: ' + e.message, 'error');
+    }
+  }
+
+  // ---------- screencap 모드: 기기 본체 화면 폴링 ----------
+
+  startCapture() {
+    this.lastHash = '';
+    this.status(this.serial);
+    if (config().pkg) this.launch().catch(() => {});
+    this.tick();
   }
 
   schedule() {
-    this.stop();
+    if (this.timer) clearTimeout(this.timer);
     this.timer = setTimeout(() => this.tick(), config().interval);
   }
 
   async tick() {
+    if (!this.started) return;
     if (this.busy) return this.schedule();
     this.busy = true;
     try {
-      const { adb: bin } = config();
-      const png = await adb(bin, ['-s', this.serial, 'exec-out', 'screencap', '-p'], {
-        binary: true,
-      });
+      const c = config();
+      const png = await adb(c.adb, ['-s', this.serial, 'exec-out', 'screencap', '-p'], { binary: true });
       const size = pngSize(png);
       if (!size) throw new Error('화면을 읽지 못했습니다');
-      this.size = size;
       // 텍스트 위주 화면은 대부분 그대로다. 바뀐 것만 보낸다.
       const hash = crypto.createHash('sha1').update(png).digest('hex');
       if (hash !== this.lastHash) {
         this.lastHash = hash;
         this.post({ type: 'frame', data: png.toString('base64'), w: size.w, h: size.h });
       }
-    } catch (e) {
+    } catch (_) {
       this.lastHash = '';
       this.status('화면을 읽지 못했습니다. 기기 연결을 확인하세요.', 'error');
     } finally {
@@ -149,38 +229,59 @@ class ScreenView {
     }
   }
 
+  // ---------- 입력 ----------
+
   async send(args) {
     if (!this.serial) return;
-    const { adb: bin } = config();
+    const c = config();
+    // 가상 디스플레이를 쓰는 중이면 그쪽으로 보내야 한다.
+    const target = this.displayId === null ? args : ['-d', String(this.displayId), ...args];
     try {
-      await adb(bin, ['-s', this.serial, 'shell', ...args]);
-      this.lastHash = ''; // 다음 프레임은 무조건 보낸다
-    } catch (e) {
-      /* 무시하고 다음 프레임에서 복구 */
+      await adb(c.adb, ['-s', this.serial, 'shell', 'input', ...target]);
+      this.lastHash = '';
+    } catch (_) {
+      /* 다음 프레임에서 복구 */
     }
   }
 
   async launch() {
-    const { pkg } = config();
-    if (!pkg) return;
-    await this.send(['monkey', '-p', pkg, '-c', 'android.intent.category.LAUNCHER', '1']);
+    const c = config();
+    if (!c.pkg) return;
+    try {
+      if (this.displayId !== null) {
+        const comp = await launcherActivity(c.adb, this.serial, c.pkg);
+        if (comp) {
+          await adb(c.adb, [
+            '-s', this.serial, 'shell', 'am', 'start',
+            '--display', String(this.displayId), '-n', comp,
+          ]);
+          return;
+        }
+      }
+      await adb(c.adb, [
+        '-s', this.serial, 'shell', 'monkey', '-p', c.pkg,
+        '-c', 'android.intent.category.LAUNCHER', '1',
+      ]);
+    } catch (_) {
+      /* 무시 */
+    }
   }
 
   onMessage(m) {
     switch (m.type) {
       case 'tap':
-        this.send(['input', 'tap', String(Math.round(m.x)), String(Math.round(m.y))]);
+        this.send(['tap', String(Math.round(m.x)), String(Math.round(m.y))]);
         break;
       case 'swipe':
         this.send([
-          'input', 'swipe',
+          'swipe',
           String(Math.round(m.x1)), String(Math.round(m.y1)),
           String(Math.round(m.x2)), String(Math.round(m.y2)),
           String(m.ms || 150),
         ]);
         break;
       case 'key':
-        this.send(['input', 'keyevent', String(m.code)]);
+        this.send(['keyevent', String(m.code)]);
         break;
       case 'launch':
         this.launch();
@@ -192,7 +293,7 @@ class ScreenView {
     }
   }
 
-  html(webview) {
+  html() {
     const nonce = crypto.randomBytes(16).toString('base64');
     const csp = [
       "default-src 'none'",
@@ -231,7 +332,7 @@ class ScreenView {
   #status { margin-left: auto; opacity: .7; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #status.error { color: var(--vscode-errorForeground); opacity: 1; }
   #wrap { flex: 1 1 auto; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; }
-  #screen { max-width: 100%; max-height: 100%; object-fit: contain; cursor: pointer; display: none; image-rendering: auto; }
+  #screen, #shot { max-width: 100%; max-height: 100%; object-fit: contain; cursor: pointer; display: none; }
   #empty { opacity: .6; padding: 16px; text-align: center; line-height: 1.6; }
 </style>
 </head>
@@ -240,48 +341,107 @@ class ScreenView {
     <button id="back" title="뒤로">←</button>
     <button id="home" title="홈">⌂</button>
     <button id="app" title="앱 실행">▶</button>
-    <button id="again" title="기기 다시 찾기">↻</button>
+    <button id="again" title="다시 연결">↻</button>
     <span id="status"></span>
   </div>
   <div id="wrap">
-    <img id="screen" alt="">
+    <canvas id="screen"></canvas>
+    <img id="shot" alt="">
     <div id="empty">기기 화면을 기다리는 중…</div>
   </div>
 <script nonce="${nonce}">
 (function () {
   const vs = acquireVsCodeApi();
-  const img = document.getElementById('screen');
+  const canvas = document.getElementById('screen');
+  const shot = document.getElementById('shot');
   const empty = document.getElementById('empty');
   const status = document.getElementById('status');
+  const ctx = canvas.getContext('2d');
   let dev = { w: 0, h: 0 };
+  let decoder = null, ts = 0, waitingKey = true, target = canvas;
+
+  function show(el) {
+    target = el;
+    canvas.style.display = el === canvas ? 'block' : 'none';
+    shot.style.display = el === shot ? 'block' : 'none';
+    empty.style.display = 'none';
+  }
+
+  function fail(msg) {
+    status.textContent = msg; status.className = 'error';
+    canvas.style.display = 'none'; shot.style.display = 'none';
+    empty.style.display = 'block'; empty.textContent = msg;
+  }
+
+  function b64(s) {
+    const bin = atob(s), out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+
+  function setupDecoder(codec) {
+    if (typeof VideoDecoder === 'undefined') {
+      fail('이 에디터는 WebCodecs를 지원하지 않습니다. 설정에서 mode를 screencap으로 바꾸세요.');
+      return;
+    }
+    try { if (decoder) decoder.close(); } catch (e) {}
+    waitingKey = true;
+    decoder = new VideoDecoder({
+      output: (frame) => {
+        if (canvas.width !== frame.displayWidth) {
+          canvas.width = frame.displayWidth;
+          canvas.height = frame.displayHeight;
+        }
+        ctx.drawImage(frame, 0, 0);
+        frame.close();
+        show(canvas);
+      },
+      error: (e) => fail('디코딩 오류: ' + e.message),
+    });
+    decoder.configure({ codec: codec, optimizeForLatency: true });
+  }
 
   window.addEventListener('message', (e) => {
     const m = e.data;
-    if (m.type === 'frame') {
+    if (m.type === 'config') {
+      setupDecoder(m.codec);
+    } else if (m.type === 'chunk') {
+      if (!decoder || decoder.state !== 'configured') return;
+      if (waitingKey && !m.key) return;   // 키프레임부터 시작해야 한다
+      waitingKey = false;
+      try {
+        decoder.decode(new EncodedVideoChunk({
+          type: m.key ? 'key' : 'delta',
+          timestamp: (ts += 16000),
+          data: b64(m.data),
+        }));
+      } catch (err) { waitingKey = true; }
+    } else if (m.type === 'frame') {
       dev = { w: m.w, h: m.h };
-      img.src = 'data:image/png;base64,' + m.data;
-      img.style.display = 'block';
-      empty.style.display = 'none';
+      shot.src = 'data:image/png;base64,' + m.data;
+      show(shot);
+    } else if (m.type === 'size') {
+      dev = { w: m.w, h: m.h };
     } else if (m.type === 'status') {
       status.textContent = m.text;
       status.className = m.kind === 'error' ? 'error' : '';
-      if (m.kind === 'error') { img.style.display = 'none'; empty.style.display = 'block'; empty.textContent = m.text; }
+      if (m.kind === 'error') fail(m.text);
     }
   });
 
   // 화면에 보이는 위치를 기기 좌표로 되돌린다.
   function toDevice(ev) {
-    const r = img.getBoundingClientRect();
+    const r = target.getBoundingClientRect();
     if (!r.width || !dev.w) return null;
     const x = (ev.clientX - r.left) / r.width * dev.w;
     const y = (ev.clientY - r.top) / r.height * dev.h;
     if (x < 0 || y < 0 || x > dev.w || y > dev.h) return null;
-    return { x, y };
+    return { x: x, y: y };
   }
 
   let down = null;
-  img.addEventListener('mousedown', (e) => { down = { p: toDevice(e), t: Date.now() }; });
-  img.addEventListener('mouseup', (e) => {
+  function onDown(e) { down = { p: toDevice(e), t: Date.now() }; }
+  function onUp(e) {
     const up = toDevice(e);
     if (!down || !down.p || !up) { down = null; return; }
     const dx = up.x - down.p.x, dy = up.y - down.p.y;
@@ -292,11 +452,9 @@ class ScreenView {
                        ms: Math.min(600, Math.max(80, Date.now() - down.t)) });
     }
     down = null;
-  });
-
-  // 휠로 스크롤
+  }
   let wheelLock = 0;
-  img.addEventListener('wheel', (e) => {
+  function onWheel(e) {
     e.preventDefault();
     const now = Date.now();
     if (now < wheelLock || !dev.h) return;
@@ -304,7 +462,12 @@ class ScreenView {
     const cx = dev.w / 2, cy = dev.h / 2;
     const amount = dev.h * 0.28 * (e.deltaY > 0 ? -1 : 1);
     vs.postMessage({ type: 'swipe', x1: cx, y1: cy, x2: cx, y2: cy + amount, ms: 160 });
-  }, { passive: false });
+  }
+  [canvas, shot].forEach((el) => {
+    el.addEventListener('mousedown', onDown);
+    el.addEventListener('mouseup', onUp);
+    el.addEventListener('wheel', onWheel, { passive: false });
+  });
 
   document.getElementById('back').onclick = () => vs.postMessage({ type: 'key', code: 4 });
   document.getElementById('home').onclick = () => vs.postMessage({ type: 'key', code: 3 });
@@ -327,7 +490,8 @@ function activate(context) {
     vscode.commands.registerCommand('androidPanel.reconnect', () => {
       provider.stop();
       provider.start();
-    })
+    }),
+    { dispose: () => provider.stop() }
   );
 }
 

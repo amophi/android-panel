@@ -69,6 +69,35 @@
           "type": "string",
           "default": "",
           "markdownDescription": "쓸 기기의 시리얼. 비워두면 자동으로 고른다(에뮬레이터보다 실물 기기를 먼저)."
+        },
+        "androidPanel.mode": {
+          "type": "string",
+          "enum": [
+            "stream",
+            "screencap"
+          ],
+          "default": "stream",
+          "markdownDescription": "`stream`: scrcpy 서버로 가상 디스플레이를 만들어 H.264 로 받는다. 기기 본체 화면은 자유롭다.\n\n`screencap`: 기기 본체 화면을 주기적으로 캡처한다. scrcpy 가 없어도 되지만 기기를 점유한다."
+        },
+        "androidPanel.scrcpyServerPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "`stream` 모드에서 쓸 `scrcpy-server` 파일 경로. scrcpy 배포본에 같이 들어있다."
+        },
+        "androidPanel.scrcpyVersion": {
+          "type": "string",
+          "default": "4.1",
+          "markdownDescription": "`scrcpy-server` 파일의 버전. 값이 다르면 서버가 연결을 거부한다."
+        },
+        "androidPanel.newDisplay": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "`stream` 모드에서 만들 가상 디스플레이. 예: `1440x3120/560`. 비우면 기기 본체 화면을 비춘다.\n\n기기의 실제 밀도와 맞추지 않으면 화면 오른쪽이 잘릴 수 있다(`adb shell wm density` 로 확인)."
+        },
+        "androidPanel.maxFps": {
+          "type": "number",
+          "default": 0,
+          "markdownDescription": "`stream` 모드의 초당 프레임 상한. 0이면 제한하지 않는다."
         }
       }
     }

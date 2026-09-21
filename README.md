@@ -2,9 +2,14 @@
 
 Mirrors a connected Android device into a VS Code sidebar panel and lets you drive it with the mouse.
 
-The device screen is captured over `adb` and drawn in a webview. Clicks, drags and wheel scrolls are
-translated back into `input tap` / `input swipe` events, so the panel is interactive rather than a
-read-only preview. No native modules, no bundler, no npm dependencies — the extension is two files.
+The panel speaks the scrcpy server protocol directly: it pushes `scrcpy-server` to the device, opens
+an `adb reverse` tunnel, and decodes the H.264 stream in the webview with WebCodecs. Clicks, drags and
+wheel scrolls go back as `input tap` / `input swipe`, so the panel is interactive rather than a
+read-only preview. No native modules, no bundler, no npm dependencies.
+
+Because it talks to the scrcpy server rather than shelling out to `screencap`, it can mirror a
+**virtual display** — the app runs on a display of its own and the device's real screen stays free
+for something else.
 
 ## Why
 
@@ -17,6 +22,9 @@ hidden.
 
 - `adb` on `PATH`, or an absolute path in `androidPanel.adbPath`
 - USB debugging enabled on the device, and the host authorised
+- For `stream` mode: the `scrcpy-server` file from a scrcpy release, and an editor whose Chromium
+  provides WebCodecs. `androidPanel.scrcpyVersion` must match the server file, or the server refuses
+  the connection.
 
 ## Install
 
@@ -35,7 +43,12 @@ is convenient while developing.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
+| `androidPanel.mode` | `stream` | `stream` decodes the scrcpy H.264 stream; `screencap` polls `adb exec-out screencap` |
 | `androidPanel.adbPath` | `adb` | Path to the `adb` executable |
+| `androidPanel.scrcpyServerPath` | *(empty)* | `stream` mode: path to the `scrcpy-server` file |
+| `androidPanel.scrcpyVersion` | `4.1` | Version string the server expects |
+| `androidPanel.newDisplay` | *(empty)* | `stream` mode: virtual display to create, e.g. `1440x3120/560`. Empty mirrors the real screen |
+| `androidPanel.maxFps` | `0` | `stream` mode frame cap; 0 is unlimited |
 | `androidPanel.package` | *(empty)* | Package launched when the panel opens. Empty mirrors whatever is on screen |
 | `androidPanel.intervalMs` | `600` | Capture interval in milliseconds |
 | `androidPanel.serial` | *(empty)* | Device serial. Empty picks automatically, preferring physical devices over emulators |
@@ -54,20 +67,38 @@ package installed — useful when an emulator is running alongside a phone.
 | ▶ | Launch the configured package |
 | ↻ | Re-detect the device |
 
+## Stream protocol
+
+Measured against scrcpy 4.1. The server is started as:
+
+```
+CLASSPATH=/data/local/tmp/scrcpy-server.jar app_process / \n  com.genymobile.scrcpy.Server 4.1 scid=<8 hex digits> log_level=info \n  audio=false control=false new_display=<WxH/dpi>
+```
+
+`scid` is parsed with `Integer.parseInt(s, 16)`, so it must fit in a signed 32-bit int — the high
+bit has to be clear. The server then connects back through the reverse tunnel and writes:
+
+```
+device name   64 bytes, NUL-padded
+codec meta    16 bytes: codec id (4) + unknown (4) + width (4) + height (4)
+frames        repeated: PTS/flags (8) + length (4) + Annex-B payload
+```
+
+In the PTS word, bit 62 marks a config packet (SPS/PPS) and bit 61 marks a key frame. The config
+packet is prepended to the following key frame before handing it to `VideoDecoder`, which is
+configured from the profile and level found in the SPS.
+
+Input does not use the scrcpy control socket. `control=false` is passed and taps are sent with
+`adb shell input -d <displayId> tap`, which keeps the client to one socket.
+
 ## Behaviour notes
 
-Frames are hashed and only pushed to the webview when the screen actually changed, so a static
-screen costs one `screencap` per interval and nothing else. Capture stops entirely while the view
-is hidden.
+Capture stops entirely while the view is hidden.
 
-`screencap` can only read **physical** displays. Virtual displays — including the ones `scrcpy
---new-display` creates — are rejected by both `screencap` and `screenrecord`, which take physical
-display IDs only. The panel therefore shows the device's own screen, and the device cannot be used
-for something else at the same time.
-
-Expect roughly 1–2 frames per second at the default interval. That is fine for turn-based or
-text-heavy apps and poor for anything animated; this is a capture-and-poll design, not a video
-stream.
+In `screencap` mode frames are hashed and only pushed when the screen actually changed, so a static
+screen costs one `screencap` per interval and nothing else. That mode can only read **physical**
+displays: virtual displays are rejected by `screencap` and `screenrecord` alike, which take physical
+display IDs only. Use `stream` mode for a virtual display.
 
 ## License
 
