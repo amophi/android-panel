@@ -17,6 +17,7 @@ function config() {
     version: (c.get('scrcpyVersion') || '4.1').trim(),
     newDisplay: (c.get('newDisplay') || '').trim(),
     maxFps: c.get('maxFps') || 0,
+    keepAlive: c.get('keepStreamWhenHidden') !== false,
   };
 }
 
@@ -90,7 +91,13 @@ class ScreenView {
     view.webview.options = { enableScripts: true };
     view.webview.html = this.html(view.webview);
     view.webview.onDidReceiveMessage((m) => this.onMessage(m));
-    view.onDidChangeVisibility(() => (view.visible ? this.start() : this.stop()));
+    view.onDidChangeVisibility(() => {
+      if (view.visible) return this.start();
+      // stream 모드에서 스트림을 끊으면 가상 디스플레이가 사라지고 앱도 같이 죽는다.
+      // 사이드바에서 잠깐 다른 곳을 봤다고 진행하던 것이 날아가면 안 되므로 살려둔다.
+      const c = config();
+      if (!(c.mode === 'stream' && c.keepAlive)) this.stop();
+    });
     view.onDidDispose(() => this.stop());
     if (view.visible) this.start();
   }
@@ -484,7 +491,8 @@ function activate(context) {
   const provider = new ScreenView(context);
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(VIEW_ID, provider, {
-      webviewOptions: { retainContextWhenHidden: false },
+      // 디코더 상태를 유지해야 다시 열 때 키프레임을 기다리지 않는다.
+      webviewOptions: { retainContextWhenHidden: true },
     }),
     vscode.commands.registerCommand('androidPanel.launch', () => provider.launch()),
     vscode.commands.registerCommand('androidPanel.reconnect', () => {

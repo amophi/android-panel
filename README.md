@@ -49,6 +49,7 @@ is convenient while developing.
 | `androidPanel.scrcpyVersion` | `4.1` | Version string the server expects |
 | `androidPanel.newDisplay` | *(empty)* | `stream` mode: virtual display to create, e.g. `1440x3120/560`. Empty mirrors the real screen |
 | `androidPanel.maxFps` | `0` | `stream` mode frame cap; 0 is unlimited |
+| `androidPanel.keepStreamWhenHidden` | `true` | Keep the stream running while the view is hidden |
 | `androidPanel.package` | *(empty)* | Package launched when the panel opens. Empty mirrors whatever is on screen |
 | `androidPanel.intervalMs` | `600` | Capture interval in milliseconds |
 | `androidPanel.serial` | *(empty)* | Device serial. Empty picks automatically, preferring physical devices over emulators |
@@ -93,7 +94,12 @@ Input does not use the scrcpy control socket. `control=false` is passed and taps
 
 ## Behaviour notes
 
-Capture stops entirely while the view is hidden.
+Tearing the stream down destroys the virtual display, and the activity on it dies with it. Switching
+to another sidebar view would therefore restart the app, so in `stream` mode the stream keeps running
+while the view is hidden and the webview retains its decoder. Set `keepStreamWhenHidden` to `false`
+to trade that for idle battery, at the cost of restarting the app each time the panel is reopened.
+
+In `screencap` mode there is no such state, so capture stops entirely while the view is hidden.
 
 In `screencap` mode frames are hashed and only pushed when the screen actually changed, so a static
 screen costs one `screencap` per interval and nothing else. That mode can only read **physical**

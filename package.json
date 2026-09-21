@@ -98,6 +98,11 @@
           "type": "number",
           "default": 0,
           "markdownDescription": "`stream` 모드의 초당 프레임 상한. 0이면 제한하지 않는다."
+        },
+        "androidPanel.keepStreamWhenHidden": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "`stream` 모드에서 패널을 숨겨도 스트림을 유지한다. 끄면 가상 디스플레이가 사라지면서 앱이 종료되므로, 다시 열 때 처음부터 시작된다."
         }
       }
     }
