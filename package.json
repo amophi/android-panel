@@ -2,6 +2,7 @@
   "name": "android-panel",
   "displayName": "Android Panel",
   "description": "연결된 안드로이드 기기 화면을 사이드바 패널에 띄우고 마우스로 조작한다.",
+  "icon": "icon.png",
   "version": "0.1.0",
   "publisher": "amophi",
   "license": "MIT",

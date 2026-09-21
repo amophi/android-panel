@@ -159,6 +159,15 @@ screen costs one `screencap` per interval and nothing else. That mode can only r
 displays: virtual displays are rejected by `screencap` and `screenrecord` alike, which take physical
 display IDs only. Use `stream` mode for a virtual display.
 
+## Icons
+
+Two different things, easy to confuse. `contributes.viewsContainers.activitybar[].icon` is the
+activity bar glyph: a monochrome SVG that must paint with `currentColor` so it follows the theme and
+the selected/unselected state. The top-level `icon` field is the raster image shown in the extensions
+list and must be a PNG, so `currentColor` is not available and the artwork carries its own colour.
+
+Both are drawn from the same phone outline, kept at a 24-unit grid so the two stay in step.
+
 ## License
 
 MIT
