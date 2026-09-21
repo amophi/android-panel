@@ -48,6 +48,7 @@ is convenient while developing.
 | `androidPanel.scrcpyServerPath` | *(empty)* | `stream` mode: path to the `scrcpy-server` file |
 | `androidPanel.scrcpyVersion` | `4.1` | Version string the server expects |
 | `androidPanel.newDisplay` | *(empty)* | `stream` mode: virtual display to create, e.g. `1440x3120/560`. Empty mirrors the real screen |
+| `androidPanel.maxSize` | `1080` | `stream` mode: cap the encoded frame's long edge. 0 encodes at full resolution |
 | `androidPanel.maxFps` | `0` | `stream` mode frame cap; 0 is unlimited |
 | `androidPanel.keepStreamWhenHidden` | `true` | Keep the stream running while the view is hidden |
 | `androidPanel.package` | *(empty)* | Package launched when the panel opens. Empty mirrors whatever is on screen |
@@ -67,6 +68,7 @@ package installed — useful when an emulator is running alongside a phone.
 | ← / ⌂ | Back / Home key events |
 | ▶ | Launch the configured package |
 | ↻ | Re-detect the device |
+| ⤢ | Toggle between fitting the whole screen and filling the panel width |
 
 ## Stream protocol
 
@@ -91,6 +93,20 @@ configured from the profile and level found in the SPS.
 
 Input does not use the scrcpy control socket. `control=false` is passed and taps are sent with
 `adb shell input -d <displayId> tap`, which keeps the client to one socket.
+
+## Keeping it cheap
+
+A phone screen is far larger than a sidebar. Encoding 1440x3120 and scaling it down in the webview
+wastes most of the work, so `maxSize` asks the server to scale before encoding. On a 1440x3120
+display `maxSize: 1080` yields 498x1080 — still sharper than the panel is wide:
+
+| | encoded | bandwidth | pixels per frame |
+| --- | --- | --- | --- |
+| unscaled | 1440x3120 | ~50 KB/s | 4.49 M |
+| `maxSize: 1080` | 498x1080 | ~13 KB/s | 0.54 M |
+
+Scaling separates two coordinate spaces: the video is 498x1080 but `input tap` still expects display
+coordinates. The panel asks the device with `wm size -d <id>` rather than reusing the video size.
 
 ## Behaviour notes
 

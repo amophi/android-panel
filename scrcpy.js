@@ -81,6 +81,7 @@ class ScrcpyStream extends EventEmitter {
     ];
     if (this.o.newDisplay) args.push(`new_display=${this.o.newDisplay}`);
     if (this.o.maxFps) args.push(`max_fps=${this.o.maxFps}`);
+    if (this.o.maxSize) args.push(`max_size=${this.o.maxSize}`);
 
     this.proc = spawn(this.o.adb, args, { windowsHide: true });
     this.proc.stdout.on('data', (d) => this.onServerLog(String(d)));

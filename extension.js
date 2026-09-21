@@ -17,6 +17,7 @@ function config() {
     version: (c.get('scrcpyVersion') || '4.1').trim(),
     newDisplay: (c.get('newDisplay') || '').trim(),
     maxFps: c.get('maxFps') || 0,
+    maxSize: c.get('maxSize') || 0,
     keepAlive: c.get('keepStreamWhenHidden') !== false,
   };
 }
@@ -158,16 +159,18 @@ class ScreenView {
       version: c.version,
       newDisplay: c.newDisplay || null,
       maxFps: c.maxFps,
+      maxSize: c.maxSize,
     });
     this.stream = s;
 
     s.on('display', async (id) => {
       this.displayId = id;
+      await this.sendDeviceSize();
       if (c.pkg) await this.launch();
     });
     s.on('meta', (m) => {
-      this.post({ type: 'size', w: m.width, h: m.height });
       this.status(`${this.serial} · ${m.width}x${m.height}`);
+      this.sendDeviceSize();
     });
     s.on('packet', (p) => {
       if (p.type === 'config') {
@@ -195,6 +198,24 @@ class ScreenView {
     } catch (e) {
       this.started = false;
       this.status('스트림을 시작하지 못했습니다: ' + e.message, 'error');
+    }
+  }
+
+  /**
+   * 터치 좌표는 영상 크기가 아니라 디스플레이 해상도를 따른다.
+   * max_size 로 줄여 보내면 둘이 달라지므로 기기에 직접 물어본다.
+   */
+  async sendDeviceSize() {
+    const c = config();
+    const args = ['-s', this.serial, 'shell', 'wm', 'size'];
+    if (this.displayId !== null) args.push('-d', String(this.displayId));
+    try {
+      const out = await adb(c.adb, args);
+      const lines = out.split(/\r?\n/).filter(Boolean);
+      const m = /(\d+)x(\d+)/.exec(lines[lines.length - 1] || '');
+      if (m) this.post({ type: 'size', w: Number(m[1]), h: Number(m[2]) });
+    } catch (_) {
+      /* 다음 기회에 */
     }
   }
 
@@ -339,7 +360,9 @@ class ScreenView {
   #status { margin-left: auto; opacity: .7; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #status.error { color: var(--vscode-errorForeground); opacity: 1; }
   #wrap { flex: 1 1 auto; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+  #wrap.wide { align-items: flex-start; overflow-y: auto; }
   #screen, #shot { max-width: 100%; max-height: 100%; object-fit: contain; cursor: pointer; display: none; }
+  #wrap.wide #screen, #wrap.wide #shot { width: 100%; height: auto; max-height: none; }
   #empty { opacity: .6; padding: 16px; text-align: center; line-height: 1.6; }
 </style>
 </head>
@@ -349,6 +372,7 @@ class ScreenView {
     <button id="home" title="홈">⌂</button>
     <button id="app" title="앱 실행">▶</button>
     <button id="again" title="다시 연결">↻</button>
+    <button id="fit" title="너비에 맞추기 / 전체 보기">⤢</button>
     <span id="status"></span>
   </div>
   <div id="wrap">
@@ -480,6 +504,15 @@ class ScreenView {
   document.getElementById('home').onclick = () => vs.postMessage({ type: 'key', code: 3 });
   document.getElementById('app').onclick = () => vs.postMessage({ type: 'launch' });
   document.getElementById('again').onclick = () => vs.postMessage({ type: 'reconnect' });
+
+  // 사이드바 폭에 맞춰 꽉 채울지(세로 스크롤), 전체가 보이게 줄일지 고른다.
+  const wrap = document.getElementById('wrap');
+  const saved = vs.getState() || {};
+  if (saved.wide) wrap.classList.add('wide');
+  document.getElementById('fit').onclick = () => {
+    wrap.classList.toggle('wide');
+    vs.setState({ wide: wrap.classList.contains('wide') });
+  };
 }());
 </script>
 </body>
