@@ -29,16 +29,41 @@ hidden.
 
 ## Install
 
-There is no marketplace release. Clone into the editor's extensions directory and reload:
+There is no marketplace release. Clone into the editor's extensions directory and reload the window:
 
 ```
 git clone https://github.com/amophi/android-panel.git \
   ~/.vscode/extensions/android-panel
 ```
 
-On VS Code forks, substitute the matching directory — for example `~/.antigravity-ide/extensions`.
-A directory junction or symlink from the extensions directory to a working copy also works, which
-is convenient while developing.
+On VS Code forks, substitute the matching directory — `~/.antigravity-ide/extensions`,
+`~/.cursor/extensions`, and so on. `git pull` in that directory updates the extension; there is
+nothing to build.
+
+If the machine has no git, build a `.vsix` where one is available and install that instead:
+
+```
+npx @vscode/vsce package --no-dependencies --out android-panel.vsix
+code --install-extension android-panel.vsix
+```
+
+While developing, a directory junction or symlink from the extensions directory to a working copy
+avoids copying after every edit.
+
+## Setting it up on a new machine
+
+`stream` mode needs `adb` and the `scrcpy-server` file. Both ship together in a scrcpy release, so
+unpacking scrcpy anywhere is usually enough — leave `adbPath` and `scrcpyServerPath` empty and the
+extension looks for them:
+
+- whatever `scrcpy` or `adb` resolve to on `PATH`
+- `%LOCALAPPDATA%\scrcpy`, including one level of subdirectories, since scrcpy releases unpack into
+  a versioned folder such as `scrcpy-win64-v4.1`
+- the Android SDK's `platform-tools`
+- `/usr/local/bin`, `/usr/bin`, `/opt/homebrew/bin`
+
+Set the two paths explicitly only when discovery misses. `scrcpyVersion` can stay empty as well; it
+is read from the `scrcpy` binary next to the server file.
 
 ## Settings
 
