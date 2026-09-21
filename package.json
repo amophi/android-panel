@@ -1,0 +1,76 @@
+{
+  "name": "android-panel",
+  "displayName": "Android Panel",
+  "description": "연결된 안드로이드 기기 화면을 사이드바 패널에 띄우고 마우스로 조작한다.",
+  "version": "0.1.0",
+  "publisher": "amophi",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/amophi/android-panel.git"
+  },
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "androidPanel",
+          "title": "Android Panel",
+          "icon": "icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "androidPanel": [
+        {
+          "id": "androidPanel.screen",
+          "name": "화면",
+          "type": "webview"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "androidPanel.launch",
+        "title": "Android Panel: 앱 실행"
+      },
+      {
+        "command": "androidPanel.reconnect",
+        "title": "Android Panel: 기기 다시 찾기"
+      }
+    ],
+    "configuration": {
+      "title": "Android Panel",
+      "properties": {
+        "androidPanel.adbPath": {
+          "type": "string",
+          "default": "adb",
+          "markdownDescription": "adb 실행 파일 경로. `PATH`에 없다면 전체 경로를 적는다."
+        },
+        "androidPanel.package": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "패널을 열 때 자동으로 띄울 앱의 패키지 이름. 비워두면 기기 화면을 그대로 비춘다."
+        },
+        "androidPanel.intervalMs": {
+          "type": "number",
+          "default": 600,
+          "minimum": 150,
+          "markdownDescription": "화면을 다시 읽는 간격(밀리초). 낮을수록 부드럽지만 부하가 커진다."
+        },
+        "androidPanel.serial": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "쓸 기기의 시리얼. 비워두면 자동으로 고른다(에뮬레이터보다 실물 기기를 먼저)."
+        }
+      }
+    }
+  }
+}
