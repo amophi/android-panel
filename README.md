@@ -23,8 +23,9 @@ hidden.
 - `adb` on `PATH`, or an absolute path in `androidPanel.adbPath`
 - USB debugging enabled on the device, and the host authorised
 - For `stream` mode: the `scrcpy-server` file from a scrcpy release, and an editor whose Chromium
-  provides WebCodecs. `androidPanel.scrcpyVersion` must match the server file, or the server refuses
-  the connection.
+  provides WebCodecs. The version handed to the server must match the server file exactly; leaving
+  `androidPanel.scrcpyVersion` empty derives it from the `scrcpy` binary sitting next to the file, so
+  upgrading scrcpy does not silently break the panel.
 
 ## Install
 
@@ -46,7 +47,7 @@ is convenient while developing.
 | `androidPanel.mode` | `stream` | `stream` decodes the scrcpy H.264 stream; `screencap` polls `adb exec-out screencap` |
 | `androidPanel.adbPath` | `adb` | Path to the `adb` executable |
 | `androidPanel.scrcpyServerPath` | *(empty)* | `stream` mode: path to the `scrcpy-server` file |
-| `androidPanel.scrcpyVersion` | `4.1` | Version string the server expects |
+| `androidPanel.scrcpyVersion` | *(empty)* | Version string the server expects. Empty asks the `scrcpy` binary next to the server file |
 | `androidPanel.newDisplay` | *(empty)* | `stream` mode: virtual display to create, e.g. `1440x3120/560`. Empty mirrors the real screen |
 | `androidPanel.maxSize` | `1080` | `stream` mode: cap the encoded frame's long edge. 0 encodes at full resolution |
 | `androidPanel.maxFps` | `0` | `stream` mode frame cap; 0 is unlimited |

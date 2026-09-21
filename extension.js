@@ -1,5 +1,7 @@
 const vscode = require('vscode');
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const { execFile } = require('child_process');
 const { ScrcpyStream, codecStringFromConfig } = require('./scrcpy');
 
@@ -14,7 +16,7 @@ function config() {
     interval: Math.max(150, c.get('intervalMs') || 600),
     serial: (c.get('serial') || '').trim(),
     serverPath: (c.get('scrcpyServerPath') || '').trim(),
-    version: (c.get('scrcpyVersion') || '4.1').trim(),
+    version: (c.get('scrcpyVersion') || '').trim(),
     newDisplay: (c.get('newDisplay') || '').trim(),
     maxFps: c.get('maxFps') || 0,
     maxSize: c.get('maxSize') || 0,
@@ -56,6 +58,33 @@ async function pickSerial(bin, pkg) {
     }
   }
   return ready[0];
+}
+
+/**
+ * 서버 jar 과 버전 문자열이 어긋나면 서버가 연결을 거부한다.
+ * 설정이 비어 있으면 서버 파일 옆의 scrcpy 실행 파일에게 직접 물어본다.
+ */
+const versionCache = new Map();
+async function detectVersion(serverPath) {
+  if (versionCache.has(serverPath)) return versionCache.get(serverPath);
+  const dir = path.dirname(serverPath);
+  for (const exe of ['scrcpy.exe', 'scrcpy']) {
+    const candidate = path.join(dir, exe);
+    if (!fs.existsSync(candidate)) continue;
+    try {
+      const out = await new Promise((res, rej) =>
+        execFile(candidate, ['--version'], { timeout: 10000, windowsHide: true },
+          (e, so) => (e ? rej(e) : res(so))));
+      const m = /scrcpy\s+([0-9][^\s<]*)/.exec(out);
+      if (m) {
+        versionCache.set(serverPath, m[1]);
+        return m[1];
+      }
+    } catch (_) {
+      /* 다음 후보 */
+    }
+  }
+  return null;
 }
 
 /** 패키지의 실행 액티비티를 찾는다. 가상 디스플레이로 띄우려면 컴포넌트 이름이 필요하다. */
@@ -158,11 +187,19 @@ class ScreenView {
       this.started = false;
       return this.status('scrcpyServerPath 설정이 필요합니다.', 'error');
     }
+    let version = c.version;
+    if (!version) {
+      version = await detectVersion(c.serverPath);
+      if (!version) {
+        this.started = false;
+        return this.status('scrcpy 버전을 알아내지 못했습니다. scrcpyVersion 을 직접 넣어주세요.', 'error');
+      }
+    }
     const s = new ScrcpyStream({
       adb: c.adb,
       serverPath: c.serverPath,
       serial: this.serial,
-      version: c.version,
+      version: version,
       newDisplay: c.newDisplay || null,
       maxFps: c.maxFps,
       maxSize: c.maxSize,
