@@ -11,11 +11,11 @@ function config() {
   const c = vscode.workspace.getConfiguration('androidPanel');
   return {
     mode: c.get('mode') || 'stream',
-    adb: c.get('adbPath') || 'adb',
+    adb: (c.get('adbPath') || '').trim() || RESOLVED.adb || 'adb',
     pkg: (c.get('package') || '').trim(),
     interval: Math.max(150, c.get('intervalMs') || 600),
     serial: (c.get('serial') || '').trim(),
-    serverPath: (c.get('scrcpyServerPath') || '').trim(),
+    serverPath: (c.get('scrcpyServerPath') || '').trim() || RESOLVED.serverPath || '',
     version: (c.get('scrcpyVersion') || '').trim(),
     newDisplay: (c.get('newDisplay') || '').trim(),
     maxFps: c.get('maxFps') || 0,
@@ -23,6 +23,75 @@ function config() {
     stayAwake: c.get('stayAwake') === true,
     keepAlive: c.get('keepStreamWhenHidden') !== false,
   };
+}
+
+// 설정을 비워두면 adb 와 scrcpy-server 를 흔한 위치에서 찾아 쓴다.
+// PC 를 옮길 때마다 경로를 손으로 넣지 않아도 되게 하기 위한 것이다.
+const RESOLVED = { adb: null, serverPath: null };
+const LF = String.fromCharCode(10);
+
+function which(cmd) {
+  const finder = process.platform === 'win32' ? 'where' : 'which';
+  return new Promise((res) =>
+    execFile(finder, [cmd], { timeout: 5000, windowsHide: true }, (e, out) => {
+      if (e) return res(null);
+      const first = String(out).split(LF)[0].trim();
+      res(first || null);
+    })
+  );
+}
+
+async function ensureResolved() {
+  const c = vscode.workspace.getConfiguration('androidPanel');
+  const adbSet = (c.get('adbPath') || '').trim();
+  const srvSet = (c.get('scrcpyServerPath') || '').trim();
+  if ((adbSet || RESOLVED.adb) && (srvSet || RESOLVED.serverPath)) return;
+
+  const dirs = [];
+  const add = (d) => { if (d && dirs.indexOf(d) < 0) dirs.push(d); };
+  // scrcpy 배포본은 adb 와 scrcpy-server 를 한 폴더에 담고 있다. 하나를 찾으면 둘 다 찾은 셈이다.
+  for (const exe of ['scrcpy', 'adb']) {
+    const found = await which(exe);
+    if (found) add(path.dirname(found));
+  }
+  if (adbSet) add(path.dirname(adbSet));
+  if (srvSet) add(path.dirname(srvSet));
+  const home = require('os').homedir();
+  add(path.join(process.env.LOCALAPPDATA || '', 'Android', 'Sdk', 'platform-tools'));
+  add(path.join(process.env.LOCALAPPDATA || '', 'scrcpy'));
+  add(path.join(home, 'Android', 'Sdk', 'platform-tools'));
+  add(path.join(home, 'Library', 'Android', 'sdk', 'platform-tools'));
+  add('/usr/local/bin');
+  add('/usr/bin');
+  add('/opt/homebrew/bin');
+
+  // scrcpy 배포본은 보통 scrcpy-win64-v4.1 같은 버전 폴더째 풀어 쓴다.
+  // 이름에 scrcpy 가 들어간 폴더는 바로 아래 한 단계까지 훑는다.
+  for (const d of dirs.slice()) {
+    if (path.basename(d).toLowerCase().indexOf('scrcpy') < 0) continue;
+    try {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        if (e.isDirectory()) add(path.join(d, e.name));
+      }
+    } catch (_) {
+      /* 못 읽으면 넘어간다 */
+    }
+  }
+
+  if (!adbSet && !RESOLVED.adb) {
+    outer: for (const d of dirs) {
+      for (const n of ['adb.exe', 'adb']) {
+        const f = path.join(d, n);
+        if (fs.existsSync(f)) { RESOLVED.adb = f; break outer; }
+      }
+    }
+  }
+  if (!srvSet && !RESOLVED.serverPath) {
+    for (const d of dirs) {
+      const f = path.join(d, 'scrcpy-server');
+      if (fs.existsSync(f)) { RESOLVED.serverPath = f; break; }
+    }
+  }
 }
 
 /** adb를 한 번 실행한다. binary면 stdout을 Buffer로 받는다. */
@@ -145,6 +214,7 @@ class ScreenView {
   async start() {
     if (this.started) return;
     this.started = true;
+    await ensureResolved();
     const c = config();
     this.status('기기를 찾는 중...');
     try {
