@@ -3,7 +3,7 @@
   "displayName": "Android Panel",
   "description": "%extension.description%",
   "icon": "icon.png",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "amophi",
   "license": "MIT",
   "homepage": "https://github.com/amophi/android-panel#readme",
@@ -142,6 +142,11 @@
           "type": "number",
           "default": 1080,
           "markdownDescription": "%config.maxSize%"
+        },
+        "androidPanel.wakeDevice": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "%config.wakeDevice%"
         },
         "androidPanel.stayAwake": {
           "type": "boolean",

@@ -93,6 +93,7 @@ is read from the `scrcpy` binary next to the server file.
 | `androidPanel.maxSize` | `1080` | `stream` mode: cap the encoded frame's long edge. 0 encodes at full resolution |
 | `androidPanel.maxFps` | `0` | `stream` mode frame cap; 0 is unlimited |
 | `androidPanel.keepStreamWhenHidden` | `true` | Keep the stream running while the view is hidden |
+| `androidPanel.wakeDevice` | `true` | Wake the device on start, and again if it falls asleep. Taps are dropped while it sleeps |
 | `androidPanel.stayAwake` | `false` | Ask the server to keep the device awake while charging |
 | `androidPanel.package` | *(empty)* | Package launched when the panel opens. Empty mirrors whatever is on screen |
 | `androidPanel.intervalMs` | `600` | `screencap` mode: capture interval in milliseconds |
@@ -171,6 +172,14 @@ while the view is hidden and the webview retains its decoder. Set `keepStreamWhe
 to trade that for idle battery, at the cost of restarting the app each time the panel is reopened.
 
 In `screencap` mode there is no such state, so capture stops entirely while the view is hidden.
+
+Injected taps only reach an app while the device is awake. Asleep, Android's input dispatcher
+cancels them as wake-up gestures, and the symptom is a panel that streams perfectly but ignores
+every click -- an app on a virtual display keeps rendering either way, because that display does
+not share the physical screen's power state. The keyguard is not involved: awake and locked
+delivers input fine. The panel therefore wakes the device when it starts, and again whenever the
+health check finds it asleep. `androidPanel.wakeDevice` turns that off, at the cost of a panel
+that cannot be clicked once the screen times out.
 
 In `screencap` mode frames are hashed and only pushed when the screen actually changed, so a static
 screen costs one `screencap` per interval and nothing else. That mode can only read **physical**

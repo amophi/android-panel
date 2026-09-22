@@ -7,6 +7,11 @@ const { ScrcpyStream, codecStringFromConfig } = require('./scrcpy');
 
 const VIEW_ID = 'androidPanel.screen';
 
+// A sleeping device swallows injected taps as wake-up gestures instead of delivering them to
+// the app, so the panel streams fine while nothing responds to a click. Being locked is not
+// the problem -- being asleep is.
+const KEY_WAKEUP = 'KEYCODE_WAKEUP';
+
 /** User-facing text. English is the source language; l10n/bundle.l10n.*.json overlays translations. */
 const t = (message, ...args) => vscode.l10n.t(message, ...args);
 
@@ -34,6 +39,7 @@ function config() {
     maxFps: c.get('maxFps') || 0,
     maxSize: c.get('maxSize') || 0,
     stayAwake: c.get('stayAwake') === true,
+    wakeDevice: c.get('wakeDevice') !== false,
     keepAlive: c.get('keepStreamWhenHidden') !== false,
   };
 }
@@ -251,6 +257,7 @@ class ScreenView {
       return this.status(t('No device connected. Check the USB connection.'), 'error');
     }
     this.post({ type: 'mode', mode: c.mode });
+    await this.wake(true);
     if (c.mode === 'stream') await this.startStream(c);
     else this.startCapture();
   }
@@ -359,12 +366,36 @@ class ScreenView {
   }
 
   /**
-   * The stream sometimes stays up while the picture freezes, because the virtual display
-   * went away or another app took it over. Checking periodically lets the panel put itself
-   * back together.
+   * Wakes the device unless it is already awake. Injected taps only reach a window while the
+   * device is awake; asleep, the input dispatcher cancels them. The lock screen is irrelevant,
+   * so this never unlocks anything -- awake and locked is enough.
+   *
+   * @param {boolean} unconditional skip the wakefulness check and just send the key
+   */
+  async wake(unconditional) {
+    const c = config();
+    if (!c.wakeDevice || !this.serial) return;
+    try {
+      if (!unconditional) {
+        const power = await adb(c.adb, ['-s', this.serial, 'shell', 'dumpsys', 'power']);
+        if (power.indexOf('mWakefulness=Awake') >= 0) return;
+      }
+      await adb(c.adb, ['-s', this.serial, 'shell', 'input', 'keyevent', KEY_WAKEUP]);
+    } catch (_) {
+      /* next round */
+    }
+  }
+
+  /**
+   * The stream sometimes stays up while the picture freezes, because the virtual display went
+   * away or another app took it over, and a screen timeout can put the device back to sleep,
+   * which stops input without stopping the picture. Checking periodically lets the panel put
+   * itself back together.
    */
   async healthCheck() {
-    if (!this.started || this.displayId === null || !this.stream) return;
+    if (!this.started || !this.stream) return;
+    await this.wake(false);
+    if (this.displayId === null) return;
     const c = config();
     try {
       const disp = await adb(c.adb, ['-s', this.serial, 'shell', 'dumpsys', 'display']);

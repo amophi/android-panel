@@ -23,5 +23,6 @@
   "config.maxFps": "`stream` mode: cap on frames per second. 0 does not cap.",
   "config.keepStreamWhenHidden": "`stream` mode: keep the stream running while the panel is hidden. Turning this off destroys the virtual display, which kills the app with it, so reopening the panel starts the app from scratch.",
   "config.maxSize": "`stream` mode: cap on the long edge of the encoded frame, in pixels. The device scales the screen down before encoding, which cuts bandwidth and decoding cost sharply. Anything wider than the sidebar looks the same. 0 does not scale.",
+  "config.wakeDevice": "Wake the device when the panel starts, and in `stream` mode again if a screen timeout puts it back to sleep. A sleeping device swallows injected taps instead of delivering them to the app, so the panel streams fine while nothing responds to a click. This does not unlock the device -- awake and locked is enough -- but the device's own screen does light up.",
   "config.stayAwake": "`stream` mode: keep the device awake while it charges (`stay_on_while_plugged_in`). Only needed where a screen timeout puts the device to sleep. This changes a global device setting, so it is off by default."
 }

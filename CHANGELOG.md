@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.1
+
+- Wake the device when the panel starts, and again if a screen timeout puts it back to sleep.
+  A sleeping device swallows injected taps instead of delivering them to the app, so the panel
+  streamed fine while nothing responded to a click -- an app on a virtual display keeps
+  rendering, because the display is independent of the physical screen's power state. Being
+  locked was never the problem. Set `androidPanel.wakeDevice` to `false` to keep the device
+  untouched.
+- The health check now also runs while mirroring the device's own screen; it previously did
+  nothing at all unless a virtual display was in use.
+
 ## 0.1.0
 
 First release.
