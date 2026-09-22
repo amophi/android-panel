@@ -14,7 +14,7 @@
   "config.mode.screencap": "`adb exec-out screencap` 을 주기적으로 읽는다. `adb` 만 있으면 되지만 물리 디스플레이만 찍을 수 있다.",
 
   "config.adbPath": "adb 실행 파일 경로. 비워두면 `PATH`, `%LOCALAPPDATA%\\scrcpy`, Android SDK 의 `platform-tools`, 그리고 흔한 유닉스 경로를 훑어 찾는다.",
-  "config.package": "패널을 열 때 띄울 앱의 패키지. 비워두면 그 디스플레이에 이미 있는 것을 그대로 보여준다.\n\n`패키지/액티비티` 형태로 적으면 그대로 실행한다. 홈 앱을 띄우려면 이 방법뿐이다. 홈 앱은 실행 항목을 등록하지 않아서 패키지 이름만으로는 해석되지 않는다. 기기의 런처를 여기 적으면 가상 디스플레이에 진짜 홈 화면과 모든 앱이 올라온다.",
+  "config.package": "패널을 열 때 띄울 앱의 패키지. 비워두면 그 디스플레이에 이미 있는 것을 그대로 보여준다.\n\n`패키지/액티비티` 형태로 적으면 그대로 실행한다. 실행 항목을 등록하지 않아 패키지 이름만으로는 해석되지 않는 액티비티를 띄울 때 쓴다.",
   "config.intervalMs": "`screencap` 모드에서 화면을 다시 읽는 간격(밀리초). 낮을수록 부드럽지만 부하가 커진다.",
   "config.serial": "쓸 기기의 시리얼. 비워두면 자동으로 고른다(에뮬레이터보다 실물 기기를 먼저).",
   "config.scrcpyServerPath": "`stream` 모드에서 쓸 `scrcpy-server` 파일 경로. scrcpy 배포본에 같이 들어있다. 비워두면 `adb` 와 같은 곳들을 훑어 찾는다.",

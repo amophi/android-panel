@@ -2,11 +2,13 @@
 
 ## 0.1.2
 
-- `androidPanel.package` now accepts a component (`package/activity`) and starts it as given.
-  A home app registers no launcher entry, so a package name alone resolves to nothing and the
-  device's own launcher could not be started. Naming it outright fills a virtual display with
-  the real home screen and every app on it, which is what makes the panel usable as a phone
-  rather than as a window onto one app.
+- `androidPanel.package` now accepts a component (`package/activity`) and starts it as given,
+  for an activity that registers no launcher entry and so cannot be resolved from a package
+  name alone.
+- Documented what a virtual display can and cannot show. A device's own launcher is not a way
+  to get a whole phone onto one: One UI's launcher becomes the resumed activity but paints only
+  the wallpaper there, and the vendor's secondary launcher carries a handful of apps. Mirroring
+  the real display is the only way to drive the whole phone, and that needs it unlocked.
 
 ## 0.1.1
 

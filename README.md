@@ -102,13 +102,30 @@ is read from the `scrcpy` binary next to the server file.
 When `androidPanel.package` is set, device selection prefers a device that actually has that
 package installed — useful when an emulator is running alongside a phone.
 
-A `package/activity` component is started exactly as written. That matters for home apps,
-which register no launcher entry and so cannot be resolved from a package name: pointing
-`androidPanel.package` at the device's launcher, such as
-`com.sec.android.app.launcher/.activities.LauncherActivity`, puts the real home screen on
-the virtual display with every installed app reachable from it. Without it the display
-falls back to whatever secondary launcher the vendor supplies, which on Samsung is the DeX
-one and shows only a handful of apps.
+A `package/activity` component is started exactly as written, for an activity that registers
+no launcher entry and so cannot be resolved from a package name alone.
+
+## What a virtual display can show
+
+A virtual display is a second screen, not a second phone. Nothing puts the whole device onto
+one:
+
+- Left empty, the display gets whatever secondary launcher the vendor supplies. On One UI that
+  is the Samsung DeX launcher, which carries a handful of apps and no app drawer.
+- Pointing `androidPanel.package` at the device's own launcher does not help. Measured on One
+  UI 8 / Android 16, `com.sec.android.app.launcher/.activities.LauncherActivity` does become
+  the resumed activity on the virtual display, but it paints only the wallpaper -- the icon
+  grid and the drawer never appear, because the launcher is not built to run anywhere but the
+  device's own screen.
+- `SECONDARY_HOME` resolves to nothing on that device, so there is no third-party launcher
+  slot to fill either.
+
+So a virtual display is the right tool for **one app at a time**, named in
+`androidPanel.package`, with the device's own screen left free. To drive the whole phone,
+mirror the real display instead: leave `newDisplay` empty. That shows everything and every
+app works, but the keyguard is part of what gets mirrored, and a fingerprint cannot be
+pressed from the panel. Unlock the device once by hand; because the panel keeps it awake, it
+will not lock itself again while the panel is open.
 
 ## Controls
 
