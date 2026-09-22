@@ -280,8 +280,11 @@ Two fields decide whether the token works, and the default is wrong for both:
 - **Scopes** must be *Custom defined*, then **Marketplace → Manage**. The token cannot be
   read back after the dialog closes.
 
-`OVSX_PAT` publishes to Open VSX, which is what VS Code forks read. Create it at
-**open-vsx.org** after signing in with GitHub and signing the Eclipse publisher agreement.
+`OVSX_PAT` publishes to Open VSX, which is what VS Code forks read. Sign in at
+<https://open-vsx.org> with GitHub, sign the Eclipse publisher agreement it asks for, then
+generate a token under *Settings → Access Tokens*. Open VSX also needs the publisher's
+namespace to exist before anything can go into it; the workflow creates it on the first
+publish, so there is nothing to do by hand.
 
 Store them without letting either through a shell history or a chat window:
 

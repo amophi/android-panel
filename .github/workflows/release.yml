@@ -14,6 +14,7 @@ jobs:
     # Job-level so the publish steps can ask whether they have a token before running.
     # A repository without the tokens still gets a tested, packaged GitHub release.
     env:
+      PUBLISHER: amophi
       VSCE_PAT: ${{ secrets.VSCE_PAT }}
       OVSX_PAT: ${{ secrets.OVSX_PAT }}
     steps:
@@ -44,7 +45,15 @@ jobs:
 
       - name: Publish to Open VSX
         if: env.OVSX_PAT != ''
-        run: npx --yes ovsx publish "android-panel-${GITHUB_REF_NAME}.vsix"
+        run: |
+          # Nothing can be published into a namespace that does not exist yet, and creating
+          # one that already exists is an error rather than a no-op -- so ask first.
+          if curl -sf -o /dev/null "https://open-vsx.org/api/${PUBLISHER}"; then
+            echo "namespace ${PUBLISHER} already exists"
+          else
+            npx --yes ovsx create-namespace "${PUBLISHER}"
+          fi
+          npx --yes ovsx publish "android-panel-${GITHUB_REF_NAME}.vsix"
 
       - name: Say which marketplaces were skipped
         run: |
