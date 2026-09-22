@@ -20,7 +20,10 @@ hidden.
 
 ## Requirements
 
-- `adb` on `PATH`, or an absolute path in `androidPanel.adbPath`
+The extension bundles neither `adb` nor scrcpy; it drives the copies already on the machine. A
+scrcpy release ships both in one folder, so unpacking one anywhere is usually the whole setup.
+
+- `adb`, found on `PATH` or by the discovery below, or an absolute path in `androidPanel.adbPath`
 - USB debugging enabled on the device, and the host authorised
 - For `stream` mode: the `scrcpy-server` file from a scrcpy release, and an editor whose Chromium
   provides WebCodecs. The version handed to the server must match the server file exactly; leaving
@@ -29,7 +32,20 @@ hidden.
 
 ## Install
 
-There is no marketplace release. Clone into the editor's extensions directory and reload the window:
+From the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=amophi.android-panel),
+or by searching for *Android Panel* in the Extensions view:
+
+```
+code --install-extension amophi.android-panel
+```
+
+VS Code forks — Cursor, Windsurf, VSCodium, Antigravity — read [Open VSX](https://open-vsx.org/extension/amophi/android-panel)
+rather than the Microsoft marketplace. The same release goes to both, so searching the Extensions
+view works in those editors as well.
+
+### From source
+
+Clone into the editor's extensions directory and reload the window:
 
 ```
 git clone https://github.com/amophi/android-panel.git \
@@ -70,7 +86,7 @@ is read from the `scrcpy` binary next to the server file.
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `androidPanel.mode` | `stream` | `stream` decodes the scrcpy H.264 stream; `screencap` polls `adb exec-out screencap` |
-| `androidPanel.adbPath` | `adb` | Path to the `adb` executable |
+| `androidPanel.adbPath` | *(empty)* | Path to the `adb` executable. Empty runs the discovery above |
 | `androidPanel.scrcpyServerPath` | *(empty)* | `stream` mode: path to the `scrcpy-server` file |
 | `androidPanel.scrcpyVersion` | *(empty)* | Version string the server expects. Empty asks the `scrcpy` binary next to the server file |
 | `androidPanel.newDisplay` | *(empty)* | `stream` mode: virtual display to create, e.g. `1440x3120/560`. Empty mirrors the real screen |
@@ -79,7 +95,7 @@ is read from the `scrcpy` binary next to the server file.
 | `androidPanel.keepStreamWhenHidden` | `true` | Keep the stream running while the view is hidden |
 | `androidPanel.stayAwake` | `false` | Ask the server to keep the device awake while charging |
 | `androidPanel.package` | *(empty)* | Package launched when the panel opens. Empty mirrors whatever is on screen |
-| `androidPanel.intervalMs` | `600` | Capture interval in milliseconds |
+| `androidPanel.intervalMs` | `600` | `screencap` mode: capture interval in milliseconds |
 | `androidPanel.serial` | *(empty)* | Device serial. Empty picks automatically, preferring physical devices over emulators |
 
 When `androidPanel.package` is set, device selection prefers a device that actually has that
@@ -102,7 +118,9 @@ package installed — useful when an emulator is running alongside a phone.
 Measured against scrcpy 4.1. The server is started as:
 
 ```
-CLASSPATH=/data/local/tmp/scrcpy-server.jar app_process / \n  com.genymobile.scrcpy.Server 4.1 scid=<8 hex digits> log_level=info \n  audio=false control=false new_display=<WxH/dpi>
+CLASSPATH=/data/local/tmp/scrcpy-server.jar app_process / \
+  com.genymobile.scrcpy.Server 4.1 scid=<8 hex digits> log_level=info \
+  audio=false control=false new_display=<WxH/dpi>
 ```
 
 `scid` is parsed with `Integer.parseInt(s, 16)`, so it must fit in a signed 32-bit int — the high
@@ -167,6 +185,31 @@ the selected/unselected state. The top-level `icon` field is the raster image sh
 list and must be a PNG, so `currentColor` is not available and the artwork carries its own colour.
 
 Both are drawn from the same phone outline, kept at a 24-unit grid so the two stay in step.
+
+## Language
+
+The interface is English, and Korean is used instead when the editor's display language is Korean.
+`package.nls.ko.json` covers the settings and command titles, `l10n/bundle.l10n.ko.json` the status
+messages and the panel's own buttons. Another language is one more file of each and no code changes.
+
+## Releasing
+
+Pushing a `v*` tag packages the extension, publishes it to both marketplaces, and attaches the
+`.vsix` to a GitHub release. The tag has to match `version` in `package.json` or the workflow stops
+before publishing anything.
+
+```
+npm version 0.1.0 --no-git-tag-version
+git commit -am "release: 0.1.0" && git tag v0.1.0 && git push --follow-tags
+```
+
+That needs two repository secrets: `VSCE_PAT`, an Azure DevOps personal access token scoped to
+**Marketplace → Manage**, and `OVSX_PAT`, an Open VSX access token. To publish by hand instead:
+
+```
+npx @vscode/vsce publish --no-dependencies
+npx ovsx publish android-panel.vsix
+```
 
 ## License
 

@@ -1,15 +1,15 @@
-// scrcpy 서버와 직접 말하는 클라이언트.
+// A client that speaks to the scrcpy server directly.
 //
-// scrcpy 실행 파일을 거치지 않고, 기기에 scrcpy-server.jar 를 올린 뒤
-// adb reverse 터널로 H.264 스트림을 직접 받는다. 그래야 가상 디스플레이를
-// 쓸 수 있다. 안드로이드의 screencap/screenrecord 는 물리 디스플레이만
-// 찍을 수 있어서, 가상 디스플레이는 이 경로 말고는 화면을 얻을 방법이 없다.
+// Rather than going through the scrcpy executable, this pushes scrcpy-server.jar to the
+// device and takes the H.264 stream straight off an adb reverse tunnel. That is what makes
+// a virtual display usable: Android's screencap and screenrecord can only capture physical
+// displays, so for a virtual display there is no other way to get at the picture.
 //
-// 스트림 형식 (scrcpy 4.1 에서 실측):
-//   기기명   64바이트, NUL 채움
-//   코덱메타 16바이트 = 코덱id 4 + 미상 4 + 가로 4 + 세로 4
-//   프레임   [PTS 8 + 길이 4] + Annex-B 데이터, 반복
-//   PTS 상위 비트: bit62 = 설정 패킷(SPS/PPS), bit61 = 키프레임
+// Stream format (measured against scrcpy 4.1):
+//   device name  64 bytes, NUL-padded
+//   codec meta   16 bytes = codec id 4 + unknown 4 + width 4 + height 4
+//   frames       [PTS 8 + length 4] + Annex-B data, repeated
+//   high bits of the PTS: bit62 = config packet (SPS/PPS), bit61 = key frame
 
 const net = require('net');
 const crypto = require('crypto');
@@ -19,23 +19,26 @@ const { execFile, spawn } = require('child_process');
 const DEVICE_NAME_LEN = 64;
 const CODEC_META_LEN = 16;
 const FRAME_HEADER_LEN = 12;
-const FLAG_CONFIG = 0x40000000; // PTS 상위 32비트에서 본 값
+const FLAG_CONFIG = 0x40000000; // as seen in the high 32 bits of the PTS
 const FLAG_KEY = 0x20000000;
 const REMOTE_JAR = '/data/local/tmp/scrcpy-server.jar';
 const SERVER_CLASS = 'com.genymobile.scrcpy.Server';
 const MAX_PACKET = 16 * 1024 * 1024;
 
+// The 'closed' event carries a reason code ('server-exited', 'stream-ended',
+// 'stream-corrupt') or, for socket errors, the raw message. The caller turns the
+// codes into localized text, so this file stays free of vscode and of UI strings.
 class ScrcpyStream extends EventEmitter {
   /**
    * @param {object} o
-   * @param {string} o.adb           adb 실행 파일 경로
-   * @param {string} o.serverPath    scrcpy-server 파일 경로
-   * @param {string} o.serial        기기 시리얼
-   * @param {string} o.version       scrcpy 버전 문자열 (서버 jar 과 일치해야 한다)
-   * @param {string} o.newDisplay    예: "1440x3120/560". 비우면 기기 본체 화면을 비춘다
-   * @param {number} o.maxFps        0이면 제한 없음
-   * @param {number} o.maxSize       인코딩 긴 변 상한. 화면을 줄여 보내 부하를 낮춘다
-   * @param {boolean} o.stayAwake    충전 중 기기가 잠들지 않게 한다
+   * @param {string} o.adb           path to the adb executable
+   * @param {string} o.serverPath    path to the scrcpy-server file
+   * @param {string} o.serial        device serial
+   * @param {string} o.version       scrcpy version string (must match the server jar)
+   * @param {string} o.newDisplay    e.g. "1440x3120/560". Empty mirrors the device's own screen
+   * @param {number} o.maxFps        0 for no cap
+   * @param {number} o.maxSize       cap on the encoded long edge; scaling on the device lowers the load
+   * @param {boolean} o.stayAwake    keep the device from sleeping while it charges
    */
   constructor(o) {
     super();
@@ -43,7 +46,7 @@ class ScrcpyStream extends EventEmitter {
     this.scid = null;
     this.server = null; // net.Server
     this.socket = null;
-    this.proc = null; // adb shell 프로세스
+    this.proc = null; // the adb shell process
     this.buf = Buffer.alloc(0);
     this.phase = 'meta';
     this.displayId = null;
@@ -62,9 +65,9 @@ class ScrcpyStream extends EventEmitter {
   }
 
   /**
-   * 앞선 실행이 남긴 서버와 터널을 걷어낸다.
-   * 서버가 살아 있으면 쓰이지 않는 가상 디스플레이가 계속 남고, 다음 실행에서
-   * 앱이 엉뚱한 디스플레이로 올라가 패널이 빈 보조 런처를 비추게 된다.
+   * Clears away the servers and tunnels an earlier run left behind.
+   * A surviving server keeps an unused virtual display alive, and the next run then puts the
+   * app on the wrong display, leaving the panel showing an empty secondary launcher.
    */
   async cleanupOrphans() {
     await this.exec(['shell', 'pkill', '-f', SERVER_CLASS]).catch(() => {});
@@ -78,13 +81,13 @@ class ScrcpyStream extends EventEmitter {
   async start() {
     await this.cleanupOrphans();
 
-    // 서버가 Integer.parseInt(scid, 16) 으로 읽으므로 부호 있는 32비트를 넘으면 안 된다.
+    // The server reads this with Integer.parseInt(scid, 16), so it must fit a signed 32-bit int.
     const n = crypto.randomBytes(4).readUInt32BE(0) & 0x7fffffff;
     this.scid = n.toString(16).padStart(8, '0');
 
     await this.exec(['push', this.o.serverPath, REMOTE_JAR]);
 
-    // 포트를 OS가 고르게 한 뒤, 그 포트로 되돌림 터널을 만든다.
+    // Let the OS pick the port, then aim the reverse tunnel at it.
     this.server = net.createServer((sock) => this.onSocket(sock));
     await new Promise((r) => this.server.listen(0, '127.0.0.1', r));
     const port = this.server.address().port;
@@ -96,8 +99,8 @@ class ScrcpyStream extends EventEmitter {
       'app_process', '/', SERVER_CLASS, this.o.version,
       `scid=${this.scid}`,
       'log_level=info',
-      'audio=false',   // 회사에서 쓰므로 소리는 절대 넘기지 않는다
-      'control=false', // 입력은 adb shell input 으로 따로 보낸다
+      'audio=false',   // used at work, so audio never leaves the device
+      'control=false', // input goes separately, via adb shell input
     ];
     if (this.o.newDisplay) args.push(`new_display=${this.o.newDisplay}`);
     if (this.o.maxFps) args.push(`max_fps=${this.o.maxFps}`);
@@ -108,12 +111,12 @@ class ScrcpyStream extends EventEmitter {
     this.proc.stdout.on('data', (d) => this.onServerLog(String(d)));
     this.proc.stderr.on('data', (d) => this.onServerLog(String(d)));
     this.proc.on('exit', () => {
-      if (!this.stopped) this.emit('closed', '기기 쪽 서버가 종료되었습니다');
+      if (!this.stopped) this.emit('closed', 'server-exited');
     });
   }
 
   onServerLog(text) {
-    // 가상 디스플레이 id 를 알아야 그쪽으로 탭을 보낼 수 있다.
+    // Taps can only be aimed at the virtual display once its id is known.
     const m = /New display: .*?\(id=(\d+)\)/.exec(text);
     if (m) {
       this.displayId = Number(m[1]);
@@ -123,12 +126,12 @@ class ScrcpyStream extends EventEmitter {
   }
 
   onSocket(sock) {
-    if (this.socket) return sock.destroy(); // 영상 소켓 하나만 쓴다
+    if (this.socket) return sock.destroy(); // only one video socket is used
     this.socket = sock;
     sock.on('data', (d) => this.onData(d));
     sock.on('error', (e) => this.emit('closed', e.message));
     sock.on('close', () => {
-      if (!this.stopped) this.emit('closed', '스트림이 끊겼습니다');
+      if (!this.stopped) this.emit('closed', 'stream-ended');
     });
   }
 
@@ -150,7 +153,7 @@ class ScrcpyStream extends EventEmitter {
         const hi = this.buf.readUInt32BE(0);
         const len = this.buf.readUInt32BE(8);
         if (len === 0 || len > MAX_PACKET) {
-          this.emit('closed', '스트림이 깨졌습니다');
+          this.emit('closed', 'stream-corrupt');
           return this.stop();
         }
         if (this.buf.length < FRAME_HEADER_LEN + len) return;
@@ -169,15 +172,15 @@ class ScrcpyStream extends EventEmitter {
     try { if (this.server) this.server.close(); } catch (_) {}
     try { if (this.proc) this.proc.kill(); } catch (_) {}
     if (this.scid) {
-      // adb shell 을 죽여도 기기 쪽 서버는 살아남는다. 직접 끝내야 가상
-      // 디스플레이가 사라진다.
+      // Killing the local adb shell leaves the server on the device running. It has to be
+      // ended directly for the virtual display to go away.
       await this.exec(['shell', 'pkill', '-f', `scid=${this.scid}`]).catch(() => {});
       await this.exec(['reverse', '--remove', `localabstract:scrcpy_${this.scid}`]).catch(() => {});
     }
   }
 }
 
-/** SPS 앞부분에서 WebCodecs 가 요구하는 코덱 문자열을 만든다. 예: avc1.640034 */
+/** Builds the codec string WebCodecs asks for out of the front of the SPS. E.g. avc1.640034 */
 function codecStringFromConfig(config) {
   for (let i = 0; i + 8 < config.length; i++) {
     if (config[i] === 0 && config[i + 1] === 0 && config[i + 2] === 0 && config[i + 3] === 1) {

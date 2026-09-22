@@ -1,0 +1,27 @@
+{
+  "extension.description": "연결된 안드로이드 기기 화면을 사이드바 패널에 띄우고 마우스로 조작한다.",
+
+  "view.screen.name": "화면",
+
+  "command.launch.title": "앱 실행",
+  "command.reconnect.title": "기기 다시 찾기",
+
+  "capabilities.untrustedWorkspaces": "`androidPanel.adbPath` 가 가리키는 `adb` 실행 파일을 그대로 실행하므로, 작업 공간이 엉뚱한 프로그램을 가리킬 수 있다.",
+  "capabilities.virtualWorkspaces": "`adb` 와 `scrcpy-server` 파일이 로컬 디스크에 있어야 한다.",
+
+  "config.mode": "`stream`: scrcpy 서버로 가상 디스플레이를 만들어 H.264 로 받는다. 기기 본체 화면은 자유롭다.\n\n`screencap`: 기기 본체 화면을 주기적으로 캡처한다. scrcpy 가 없어도 되지만 기기를 점유한다.",
+  "config.mode.stream": "scrcpy 의 H.264 스트림을 디코딩한다. `scrcpy-server` 파일과 WebCodecs 를 지원하는 에디터가 필요하다.",
+  "config.mode.screencap": "`adb exec-out screencap` 을 주기적으로 읽는다. `adb` 만 있으면 되지만 물리 디스플레이만 찍을 수 있다.",
+
+  "config.adbPath": "adb 실행 파일 경로. 비워두면 `PATH`, `%LOCALAPPDATA%\\scrcpy`, Android SDK 의 `platform-tools`, 그리고 흔한 유닉스 경로를 훑어 찾는다.",
+  "config.package": "패널을 열 때 자동으로 띄울 앱의 패키지 이름. 비워두면 기기 화면을 그대로 비춘다.",
+  "config.intervalMs": "`screencap` 모드에서 화면을 다시 읽는 간격(밀리초). 낮을수록 부드럽지만 부하가 커진다.",
+  "config.serial": "쓸 기기의 시리얼. 비워두면 자동으로 고른다(에뮬레이터보다 실물 기기를 먼저).",
+  "config.scrcpyServerPath": "`stream` 모드에서 쓸 `scrcpy-server` 파일 경로. scrcpy 배포본에 같이 들어있다. 비워두면 `adb` 와 같은 곳들을 훑어 찾는다.",
+  "config.scrcpyVersion": "`scrcpy-server` 파일의 버전. 비워두면 서버 파일 옆의 scrcpy 실행 파일에게 물어 자동으로 알아낸다. 값이 서버와 다르면 연결이 거부된다.",
+  "config.newDisplay": "`stream` 모드에서 만들 가상 디스플레이. 예: `1440x3120/560`. 비우면 기기 본체 화면을 비춘다.\n\n기기의 실제 밀도와 맞추지 않으면 화면 오른쪽이 잘릴 수 있다(`adb shell wm density` 로 확인).",
+  "config.maxFps": "`stream` 모드의 초당 프레임 상한. 0이면 제한하지 않는다.",
+  "config.keepStreamWhenHidden": "`stream` 모드에서 패널을 숨겨도 스트림을 유지한다. 끄면 가상 디스플레이가 사라지면서 앱이 종료되므로, 다시 열 때 처음부터 시작된다.",
+  "config.maxSize": "`stream` 모드에서 인코딩할 화면의 긴 변 상한(픽셀). 기기에서 미리 줄여 보내므로 전송량과 디코딩 부하가 크게 준다. 사이드바 폭보다 넉넉하면 화질 차이는 느껴지지 않는다. 0이면 줄이지 않는다.",
+  "config.stayAwake": "`stream` 모드에서 충전 중 기기가 잠들지 않게 한다(`stay_on_while_plugged_in`). 화면 시간 제한 때문에 기기가 잠드는 환경에서만 필요하다. 기기의 전역 설정을 바꾸므로 기본은 꺼둔다."
+}

@@ -7,6 +7,19 @@ const { ScrcpyStream, codecStringFromConfig } = require('./scrcpy');
 
 const VIEW_ID = 'androidPanel.screen';
 
+/** User-facing text. English is the source language; l10n/bundle.l10n.*.json overlays translations. */
+const t = (message, ...args) => vscode.l10n.t(message, ...args);
+
+/** scrcpy.js reports why a stream ended as a code; anything else is already a message. */
+function closeReason(code) {
+  switch (code) {
+    case 'server-exited': return t('The server on the device exited.');
+    case 'stream-corrupt': return t('The stream is corrupt.');
+    case 'stream-ended': return t('The stream was interrupted.');
+    default: return code || t('The stream was interrupted.');
+  }
+}
+
 function config() {
   const c = vscode.workspace.getConfiguration('androidPanel');
   return {
@@ -25,8 +38,8 @@ function config() {
   };
 }
 
-// 설정을 비워두면 adb 와 scrcpy-server 를 흔한 위치에서 찾아 쓴다.
-// PC 를 옮길 때마다 경로를 손으로 넣지 않아도 되게 하기 위한 것이다.
+// With the settings left empty, adb and scrcpy-server are looked up in the usual places,
+// so moving to another machine does not mean typing paths in by hand again.
 const RESOLVED = { adb: null, serverPath: null };
 const LF = String.fromCharCode(10);
 
@@ -49,7 +62,7 @@ async function ensureResolved() {
 
   const dirs = [];
   const add = (d) => { if (d && dirs.indexOf(d) < 0) dirs.push(d); };
-  // scrcpy 배포본은 adb 와 scrcpy-server 를 한 폴더에 담고 있다. 하나를 찾으면 둘 다 찾은 셈이다.
+  // A scrcpy release keeps adb and scrcpy-server in one folder, so finding either finds both.
   for (const exe of ['scrcpy', 'adb']) {
     const found = await which(exe);
     if (found) add(path.dirname(found));
@@ -65,8 +78,8 @@ async function ensureResolved() {
   add('/usr/bin');
   add('/opt/homebrew/bin');
 
-  // scrcpy 배포본은 보통 scrcpy-win64-v4.1 같은 버전 폴더째 풀어 쓴다.
-  // 이름에 scrcpy 가 들어간 폴더는 바로 아래 한 단계까지 훑는다.
+  // A scrcpy release is usually unpacked as a versioned folder, such as scrcpy-win64-v4.1,
+  // so any folder with scrcpy in its name is swept one level down.
   for (const d of dirs.slice()) {
     if (path.basename(d).toLowerCase().indexOf('scrcpy') < 0) continue;
     try {
@@ -74,7 +87,7 @@ async function ensureResolved() {
         if (e.isDirectory()) add(path.join(d, e.name));
       }
     } catch (_) {
-      /* 못 읽으면 넘어간다 */
+      /* unreadable, move on */
     }
   }
 
@@ -94,7 +107,7 @@ async function ensureResolved() {
   }
 }
 
-/** adb를 한 번 실행한다. binary면 stdout을 Buffer로 받는다. */
+/** Runs adb once. With binary, stdout comes back as a Buffer. */
 function adb(bin, args, { binary = false, timeout = 20000 } = {}) {
   return new Promise((resolve, reject) => {
     execFile(
@@ -106,7 +119,7 @@ function adb(bin, args, { binary = false, timeout = 20000 } = {}) {
   });
 }
 
-/** 에뮬레이터가 같이 붙어 있을 수 있으므로, 패키지가 지정되면 그게 깔린 기기를 고른다. */
+/** An emulator may be attached alongside, so when a package is set, prefer the device that has it. */
 async function pickSerial(bin, pkg) {
   const out = await adb(bin, ['devices']);
   const ready = out
@@ -123,15 +136,15 @@ async function pickSerial(bin, pkg) {
       const r = await adb(bin, ['-s', s, 'shell', 'pm', 'path', pkg]);
       if (r.includes('package:')) return s;
     } catch (_) {
-      /* 다음 기기 */
+      /* try the next device */
     }
   }
   return ready[0];
 }
 
 /**
- * 서버 jar 과 버전 문자열이 어긋나면 서버가 연결을 거부한다.
- * 설정이 비어 있으면 서버 파일 옆의 scrcpy 실행 파일에게 직접 물어본다.
+ * The server refuses the connection when the version string and the server jar disagree.
+ * With the setting empty, the scrcpy executable next to the server file is asked directly.
  */
 const versionCache = new Map();
 async function detectVersion(serverPath) {
@@ -150,13 +163,13 @@ async function detectVersion(serverPath) {
         return m[1];
       }
     } catch (_) {
-      /* 다음 후보 */
+      /* try the next candidate */
     }
   }
   return null;
 }
 
-/** 패키지의 실행 액티비티를 찾는다. 가상 디스플레이로 띄우려면 컴포넌트 이름이 필요하다. */
+/** Finds a package's launcher activity. Starting it on a virtual display needs the component name. */
 async function launcherActivity(bin, serial, pkg) {
   const out = await adb(bin, [
     '-s', serial, 'shell', 'cmd', 'package', 'resolve-activity',
@@ -166,10 +179,19 @@ async function launcherActivity(bin, serial, pkg) {
   return line && line.includes('/') ? line : null;
 }
 
-/** PNG 헤더에서 실제 화면 해상도를 읽는다. screencap 모드에서 클릭 좌표를 되돌릴 때 쓴다. */
+/** Reads the real screen resolution from the PNG header, to map clicks back in screencap mode. */
 function pngSize(buf) {
   if (!buf || buf.length < 24 || buf.readUInt32BE(0) !== 0x89504e47) return null;
   return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) };
+}
+
+/** Escapes a value for an HTML attribute. Translated text is text, never markup. */
+function esc(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 class ScreenView {
@@ -181,7 +203,7 @@ class ScreenView {
     this.lastHash = '';
     this.busy = false;
     this.stream = null;
-    this.displayId = null; // 가상 디스플레이. null이면 기기 본체 화면
+    this.displayId = null; // virtual display; null means the device's own screen
     this.configPacket = null;
     this.started = false;
     this.health = null;
@@ -194,8 +216,9 @@ class ScreenView {
     view.webview.onDidReceiveMessage((m) => this.onMessage(m));
     view.onDidChangeVisibility(() => {
       if (view.visible) return this.start();
-      // stream 모드에서 스트림을 끊으면 가상 디스플레이가 사라지고 앱도 같이 죽는다.
-      // 사이드바에서 잠깐 다른 곳을 봤다고 진행하던 것이 날아가면 안 되므로 살려둔다.
+      // In stream mode, tearing the stream down destroys the virtual display and the app
+      // with it. Glancing at another sidebar view should not throw away work in progress,
+      // so the stream is left running.
       const c = config();
       if (!(c.mode === 'stream' && c.keepAlive)) this.stop();
     });
@@ -216,16 +239,16 @@ class ScreenView {
     this.started = true;
     await ensureResolved();
     const c = config();
-    this.status('기기를 찾는 중...');
+    this.status(t('Looking for a device…'));
     try {
       this.serial = c.serial || (await pickSerial(c.adb, c.pkg));
     } catch (_) {
       this.started = false;
-      return this.status('adb를 실행하지 못했습니다. 설정에서 경로를 확인하세요.', 'error');
+      return this.status(t('Could not run adb. Check the path in the settings.'), 'error');
     }
     if (!this.serial) {
       this.started = false;
-      return this.status('연결된 기기가 없습니다. USB를 확인하세요.', 'error');
+      return this.status(t('No device connected. Check the USB connection.'), 'error');
     }
     this.post({ type: 'mode', mode: c.mode });
     if (c.mode === 'stream') await this.startStream(c);
@@ -250,19 +273,19 @@ class ScreenView {
     this.configPacket = null;
   }
 
-  // ---------- stream 모드: 가상 디스플레이 + H.264 ----------
+  // ---------- stream mode: virtual display + H.264 ----------
 
   async startStream(c) {
     if (!c.serverPath) {
       this.started = false;
-      return this.status('scrcpyServerPath 설정이 필요합니다.', 'error');
+      return this.status(t('The scrcpyServerPath setting is required.'), 'error');
     }
     let version = c.version;
     if (!version) {
       version = await detectVersion(c.serverPath);
       if (!version) {
         this.started = false;
-        return this.status('scrcpy 버전을 알아내지 못했습니다. scrcpyVersion 을 직접 넣어주세요.', 'error');
+        return this.status(t('Could not determine the scrcpy version. Set scrcpyVersion manually.'), 'error');
       }
     }
     const s = new ScrcpyStream({
@@ -292,34 +315,34 @@ class ScreenView {
         this.post({ type: 'config', codec: codecStringFromConfig(p.data) });
         return;
       }
-      // 설정 패킷은 키프레임 앞에 붙여 보낸다. 디코더가 따로 받으면 처리하기 까다롭다.
+      // The config packet is prepended to the key frame; a decoder handles it poorly alone.
       const body =
         p.type === 'key' && this.configPacket
           ? Buffer.concat([this.configPacket, p.data])
           : p.data;
       this.post({ type: 'chunk', key: p.type === 'key', data: body.toString('base64') });
     });
-    s.on('log', (t) => this.status(t.split('\n')[0].slice(0, 120), 'error'));
+    s.on('log', (text) => this.status(text.split('\n')[0].slice(0, 120), 'error'));
     s.on('closed', (why) => {
       if (!this.started) return;
-      this.status(why || '스트림이 끊겼습니다', 'error');
+      this.status(closeReason(why), 'error');
       this.started = false;
     });
 
     try {
       await s.start();
-      this.status(`${this.serial} · 연결 중...`);
-      // 디스플레이가 사라지거나 앱이 밀려나는 일이 있어 주기적으로 확인한다.
+      this.status(t('{0} · connecting…', this.serial));
+      // The display can vanish and the app can be pushed aside, so check in periodically.
       this.health = setInterval(() => this.healthCheck(), 8000);
     } catch (e) {
       this.started = false;
-      this.status('스트림을 시작하지 못했습니다: ' + e.message, 'error');
+      this.status(t('Could not start the stream: {0}', e.message), 'error');
     }
   }
 
   /**
-   * 터치 좌표는 영상 크기가 아니라 디스플레이 해상도를 따른다.
-   * max_size 로 줄여 보내면 둘이 달라지므로 기기에 직접 물어본다.
+   * Touch coordinates follow the display resolution, not the size of the video.
+   * max_size makes the two differ, so the device is asked directly.
    */
   async sendDeviceSize() {
     const c = config();
@@ -331,14 +354,14 @@ class ScreenView {
       const m = /(\d+)x(\d+)/.exec(lines[lines.length - 1] || '');
       if (m) this.post({ type: 'size', w: Number(m[1]), h: Number(m[2]) });
     } catch (_) {
-      /* 다음 기회에 */
+      /* next time round */
     }
   }
 
   /**
-   * 스트림은 살아 있는데 화면만 멈추는 경우가 있다. 가상 디스플레이가
-   * 사라졌거나, 다른 앱이 그 디스플레이를 차지한 경우다. 주기적으로 확인해
-   * 스스로 되돌린다.
+   * The stream sometimes stays up while the picture freezes, because the virtual display
+   * went away or another app took it over. Checking periodically lets the panel put itself
+   * back together.
    */
   async healthCheck() {
     if (!this.started || this.displayId === null || !this.stream) return;
@@ -346,7 +369,7 @@ class ScreenView {
     try {
       const disp = await adb(c.adb, ['-s', this.serial, 'shell', 'dumpsys', 'display']);
       if (disp.indexOf('displayId=' + this.displayId + ',') < 0) {
-        this.status('화면이 사라져 다시 연결합니다', 'error');
+        this.status(t('The display disappeared; reconnecting.'), 'error');
         this.stop();
         this.start();
         return;
@@ -356,11 +379,11 @@ class ScreenView {
       const at = acts.indexOf('Display #' + this.displayId + ' ');
       if (at >= 0 && acts.slice(at, at + 800).indexOf(c.pkg) < 0) await this.launch();
     } catch (_) {
-      /* 다음 주기에 다시 본다 */
+      /* look again next round */
     }
   }
 
-  // ---------- screencap 모드: 기기 본체 화면 폴링 ----------
+  // ---------- screencap mode: polling the device's own screen ----------
 
   startCapture() {
     this.lastHash = '';
@@ -382,8 +405,8 @@ class ScreenView {
       const c = config();
       const png = await adb(c.adb, ['-s', this.serial, 'exec-out', 'screencap', '-p'], { binary: true });
       const size = pngSize(png);
-      if (!size) throw new Error('화면을 읽지 못했습니다');
-      // 텍스트 위주 화면은 대부분 그대로다. 바뀐 것만 보낸다.
+      if (!size) throw new Error('could not read the screen');
+      // A mostly-text screen rarely changes, so only send what actually differs.
       const hash = crypto.createHash('sha1').update(png).digest('hex');
       if (hash !== this.lastHash) {
         this.lastHash = hash;
@@ -391,25 +414,25 @@ class ScreenView {
       }
     } catch (_) {
       this.lastHash = '';
-      this.status('화면을 읽지 못했습니다. 기기 연결을 확인하세요.', 'error');
+      this.status(t('Could not read the screen. Check the device connection.'), 'error');
     } finally {
       this.busy = false;
       this.schedule();
     }
   }
 
-  // ---------- 입력 ----------
+  // ---------- input ----------
 
   async send(args) {
     if (!this.serial) return;
     const c = config();
-    // 가상 디스플레이를 쓰는 중이면 그쪽으로 보내야 한다.
+    // While a virtual display is in use, input has to be aimed at it.
     const target = this.displayId === null ? args : ['-d', String(this.displayId), ...args];
     try {
       await adb(c.adb, ['-s', this.serial, 'shell', 'input', ...target]);
       this.lastHash = '';
     } catch (_) {
-      /* 다음 프레임에서 복구 */
+      /* the next frame recovers */
     }
   }
 
@@ -432,7 +455,7 @@ class ScreenView {
         '-c', 'android.intent.category.LAUNCHER', '1',
       ]);
     } catch (_) {
-      /* 무시 */
+      /* ignore */
     }
   }
 
@@ -464,6 +487,19 @@ class ScreenView {
 
   html() {
     const nonce = crypto.randomBytes(16).toString('base64');
+    // The webview cannot reach l10n.t, so the text is translated here and handed over.
+    const ui = {
+      back: t('Back'),
+      home: t('Home'),
+      launch: t('Launch app'),
+      reconnect: t('Reconnect'),
+      fit: t('Fit to width / show all'),
+      waiting: t('Waiting for the device screen…'),
+      noWebCodecs: t('This editor does not support WebCodecs. Change mode to screencap in the settings.'),
+      decodeError: t('Decoding error: {0}'),
+    };
+    // Keep '<' out of the JSON so no translation can close the script tag early.
+    const uiJson = JSON.stringify(ui).replace(/</g, '\\u003c');
     const csp = [
       "default-src 'none'",
       'img-src data:',
@@ -471,7 +507,7 @@ class ScreenView {
       `script-src 'nonce-${nonce}'`,
     ].join('; ');
     return `<!DOCTYPE html>
-<html lang="ko">
+<html lang="${esc(vscode.env.language || 'en')}">
 <head>
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="${csp}">
@@ -509,20 +545,21 @@ class ScreenView {
 </head>
 <body>
   <div id="bar">
-    <button id="back" title="뒤로">←</button>
-    <button id="home" title="홈">⌂</button>
-    <button id="app" title="앱 실행">▶</button>
-    <button id="again" title="다시 연결">↻</button>
-    <button id="fit" title="너비에 맞추기 / 전체 보기">⤢</button>
+    <button id="back" title="${esc(ui.back)}">←</button>
+    <button id="home" title="${esc(ui.home)}">⌂</button>
+    <button id="app" title="${esc(ui.launch)}">▶</button>
+    <button id="again" title="${esc(ui.reconnect)}">↻</button>
+    <button id="fit" title="${esc(ui.fit)}">⤢</button>
     <span id="status"></span>
   </div>
   <div id="wrap">
     <canvas id="screen"></canvas>
     <img id="shot" alt="">
-    <div id="empty">기기 화면을 기다리는 중…</div>
+    <div id="empty">${esc(ui.waiting)}</div>
   </div>
 <script nonce="${nonce}">
 (function () {
+  const S = ${uiJson};
   const vs = acquireVsCodeApi();
   const canvas = document.getElementById('screen');
   const shot = document.getElementById('shot');
@@ -553,7 +590,7 @@ class ScreenView {
 
   function setupDecoder(codec) {
     if (typeof VideoDecoder === 'undefined') {
-      fail('이 에디터는 WebCodecs를 지원하지 않습니다. 설정에서 mode를 screencap으로 바꾸세요.');
+      fail(S.noWebCodecs);
       return;
     }
     try { if (decoder) decoder.close(); } catch (e) {}
@@ -568,7 +605,7 @@ class ScreenView {
         frame.close();
         show(canvas);
       },
-      error: (e) => fail('디코딩 오류: ' + e.message),
+      error: (e) => fail(S.decodeError.replace('{0}', e.message)),
     });
     decoder.configure({ codec: codec, optimizeForLatency: true });
   }
@@ -579,7 +616,7 @@ class ScreenView {
       setupDecoder(m.codec);
     } else if (m.type === 'chunk') {
       if (!decoder || decoder.state !== 'configured') return;
-      if (waitingKey && !m.key) return;   // 키프레임부터 시작해야 한다
+      if (waitingKey && !m.key) return;   // decoding has to start on a key frame
       waitingKey = false;
       try {
         decoder.decode(new EncodedVideoChunk({
@@ -601,7 +638,7 @@ class ScreenView {
     }
   });
 
-  // 화면에 보이는 위치를 기기 좌표로 되돌린다.
+  // Maps a position on screen back to device coordinates.
   function toDevice(ev) {
     const r = target.getBoundingClientRect();
     if (!r.width || !dev.w) return null;
@@ -646,7 +683,7 @@ class ScreenView {
   document.getElementById('app').onclick = () => vs.postMessage({ type: 'launch' });
   document.getElementById('again').onclick = () => vs.postMessage({ type: 'reconnect' });
 
-  // 사이드바 폭에 맞춰 꽉 채울지(세로 스크롤), 전체가 보이게 줄일지 고른다.
+  // Fill the sidebar's width and scroll, or shrink until the whole screen fits.
   const wrap = document.getElementById('wrap');
   const saved = vs.getState() || {};
   if (saved.wide) wrap.classList.add('wide');
@@ -665,7 +702,7 @@ function activate(context) {
   const provider = new ScreenView(context);
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(VIEW_ID, provider, {
-      // 디코더 상태를 유지해야 다시 열 때 키프레임을 기다리지 않는다.
+      // Keeping the decoder's state means no wait for a key frame when the view reopens.
       webviewOptions: { retainContextWhenHidden: true },
     }),
     vscode.commands.registerCommand('androidPanel.launch', () => provider.launch()),

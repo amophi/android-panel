@@ -1,4 +1,6 @@
 .git/**
+.github/**
+test/**
 .gitignore
 .vscodeignore
 *.vsix

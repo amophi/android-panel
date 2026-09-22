@@ -1,0 +1,50 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Check the tag against package.json
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$pkg" ]; then
+            echo "tag $GITHUB_REF_NAME does not match package.json version $pkg"
+            exit 1
+          fi
+
+      - name: Test
+        run: node test/smoke.js
+
+      - name: Package
+        run: npx --yes @vscode/vsce package --no-dependencies --out "android-panel-${GITHUB_REF_NAME}.vsix"
+
+      - name: Publish to the Visual Studio Marketplace
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: npx --yes @vscode/vsce publish --packagePath "android-panel-${GITHUB_REF_NAME}.vsix"
+
+      - name: Publish to Open VSX
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: npx --yes ovsx publish "android-panel-${GITHUB_REF_NAME}.vsix"
+
+      - name: Attach the .vsix to the GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: android-panel-${{ github.ref_name }}.vsix
+          generate_release_notes: true

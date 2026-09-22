@@ -1,23 +1,50 @@
 {
   "name": "android-panel",
   "displayName": "Android Panel",
-  "description": "연결된 안드로이드 기기 화면을 사이드바 패널에 띄우고 마우스로 조작한다.",
+  "description": "%extension.description%",
   "icon": "icon.png",
   "version": "0.1.0",
   "publisher": "amophi",
   "license": "MIT",
+  "homepage": "https://github.com/amophi/android-panel#readme",
   "repository": {
     "type": "git",
     "url": "https://github.com/amophi/android-panel.git"
+  },
+  "bugs": {
+    "url": "https://github.com/amophi/android-panel/issues"
   },
   "engines": {
     "vscode": "^1.75.0"
   },
   "categories": [
-    "Other"
+    "Other",
+    "Testing"
   ],
+  "keywords": [
+    "android",
+    "scrcpy",
+    "adb",
+    "mirror",
+    "device"
+  ],
+  "galleryBanner": {
+    "color": "#1f1f1f",
+    "theme": "dark"
+  },
   "main": "./extension.js",
+  "l10n": "./l10n",
   "activationEvents": [],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "%capabilities.untrustedWorkspaces%"
+    },
+    "virtualWorkspaces": {
+      "supported": false,
+      "description": "%capabilities.virtualWorkspaces%"
+    }
+  },
   "contributes": {
     "viewsContainers": {
       "activitybar": [
@@ -32,7 +59,7 @@
       "androidPanel": [
         {
           "id": "androidPanel.screen",
-          "name": "화면",
+          "name": "%view.screen.name%",
           "type": "webview"
         }
       ]
@@ -40,11 +67,13 @@
     "commands": [
       {
         "command": "androidPanel.launch",
-        "title": "Android Panel: 앱 실행"
+        "category": "Android Panel",
+        "title": "%command.launch.title%"
       },
       {
         "command": "androidPanel.reconnect",
-        "title": "Android Panel: 기기 다시 찾기"
+        "category": "Android Panel",
+        "title": "%command.reconnect.title%"
       }
     ],
     "configuration": {
@@ -52,24 +81,24 @@
       "properties": {
         "androidPanel.adbPath": {
           "type": "string",
-          "default": "adb",
-          "markdownDescription": "adb 실행 파일 경로. `PATH`에 없다면 전체 경로를 적는다."
+          "default": "",
+          "markdownDescription": "%config.adbPath%"
         },
         "androidPanel.package": {
           "type": "string",
           "default": "",
-          "markdownDescription": "패널을 열 때 자동으로 띄울 앱의 패키지 이름. 비워두면 기기 화면을 그대로 비춘다."
+          "markdownDescription": "%config.package%"
         },
         "androidPanel.intervalMs": {
           "type": "number",
           "default": 600,
           "minimum": 150,
-          "markdownDescription": "화면을 다시 읽는 간격(밀리초). 낮을수록 부드럽지만 부하가 커진다."
+          "markdownDescription": "%config.intervalMs%"
         },
         "androidPanel.serial": {
           "type": "string",
           "default": "",
-          "markdownDescription": "쓸 기기의 시리얼. 비워두면 자동으로 고른다(에뮬레이터보다 실물 기기를 먼저)."
+          "markdownDescription": "%config.serial%"
         },
         "androidPanel.mode": {
           "type": "string",
@@ -78,42 +107,46 @@
             "screencap"
           ],
           "default": "stream",
-          "markdownDescription": "`stream`: scrcpy 서버로 가상 디스플레이를 만들어 H.264 로 받는다. 기기 본체 화면은 자유롭다.\n\n`screencap`: 기기 본체 화면을 주기적으로 캡처한다. scrcpy 가 없어도 되지만 기기를 점유한다."
+          "markdownDescription": "%config.mode%",
+          "markdownEnumDescriptions": [
+            "%config.mode.stream%",
+            "%config.mode.screencap%"
+          ]
         },
         "androidPanel.scrcpyServerPath": {
           "type": "string",
           "default": "",
-          "markdownDescription": "`stream` 모드에서 쓸 `scrcpy-server` 파일 경로. scrcpy 배포본에 같이 들어있다."
+          "markdownDescription": "%config.scrcpyServerPath%"
         },
         "androidPanel.scrcpyVersion": {
           "type": "string",
           "default": "",
-          "markdownDescription": "`scrcpy-server` 파일의 버전. 비워두면 서버 파일 옆의 scrcpy 실행 파일에게 물어 자동으로 알아낸다. 값이 서버와 다르면 연결이 거부된다."
+          "markdownDescription": "%config.scrcpyVersion%"
         },
         "androidPanel.newDisplay": {
           "type": "string",
           "default": "",
-          "markdownDescription": "`stream` 모드에서 만들 가상 디스플레이. 예: `1440x3120/560`. 비우면 기기 본체 화면을 비춘다.\n\n기기의 실제 밀도와 맞추지 않으면 화면 오른쪽이 잘릴 수 있다(`adb shell wm density` 로 확인)."
+          "markdownDescription": "%config.newDisplay%"
         },
         "androidPanel.maxFps": {
           "type": "number",
           "default": 0,
-          "markdownDescription": "`stream` 모드의 초당 프레임 상한. 0이면 제한하지 않는다."
+          "markdownDescription": "%config.maxFps%"
         },
         "androidPanel.keepStreamWhenHidden": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "`stream` 모드에서 패널을 숨겨도 스트림을 유지한다. 끄면 가상 디스플레이가 사라지면서 앱이 종료되므로, 다시 열 때 처음부터 시작된다."
+          "markdownDescription": "%config.keepStreamWhenHidden%"
         },
         "androidPanel.maxSize": {
           "type": "number",
           "default": 1080,
-          "markdownDescription": "`stream` 모드에서 인코딩할 화면의 긴 변 상한(픽셀). 기기에서 미리 줄여 보내므로 전송량과 디코딩 부하가 크게 준다. 사이드바 폭보다 넉넉하면 화질 차이는 느껴지지 않는다. 0이면 줄이지 않는다."
+          "markdownDescription": "%config.maxSize%"
         },
         "androidPanel.stayAwake": {
           "type": "boolean",
           "default": false,
-          "markdownDescription": "`stream` 모드에서 충전 중 기기가 잠들지 않게 한다(`stay_on_while_plugged_in`). 화면 시간 제한 때문에 기기가 잠드는 환경에서만 필요하다. 기기의 전역 설정을 바꾸므로 기본은 꺼둔다."
+          "markdownDescription": "%config.stayAwake%"
         }
       }
     }

@@ -1,0 +1,22 @@
+{
+  "Looking for a device…": "기기를 찾는 중…",
+  "Could not run adb. Check the path in the settings.": "adb 를 실행하지 못했습니다. 설정에서 경로를 확인하세요.",
+  "No device connected. Check the USB connection.": "연결된 기기가 없습니다. USB 연결을 확인하세요.",
+  "The scrcpyServerPath setting is required.": "scrcpyServerPath 설정이 필요합니다.",
+  "Could not determine the scrcpy version. Set scrcpyVersion manually.": "scrcpy 버전을 알아내지 못했습니다. scrcpyVersion 을 직접 넣어주세요.",
+  "{0} · connecting…": "{0} · 연결 중…",
+  "Could not start the stream: {0}": "스트림을 시작하지 못했습니다: {0}",
+  "The display disappeared; reconnecting.": "화면이 사라져 다시 연결합니다.",
+  "Could not read the screen. Check the device connection.": "화면을 읽지 못했습니다. 기기 연결을 확인하세요.",
+  "The server on the device exited.": "기기 쪽 서버가 종료되었습니다.",
+  "The stream was interrupted.": "스트림이 끊겼습니다.",
+  "The stream is corrupt.": "스트림이 깨졌습니다.",
+  "Back": "뒤로",
+  "Home": "홈",
+  "Launch app": "앱 실행",
+  "Reconnect": "다시 연결",
+  "Fit to width / show all": "너비에 맞추기 / 전체 보기",
+  "Waiting for the device screen…": "기기 화면을 기다리는 중…",
+  "This editor does not support WebCodecs. Change mode to screencap in the settings.": "이 에디터는 WebCodecs 를 지원하지 않습니다. 설정에서 mode 를 screencap 으로 바꾸세요.",
+  "Decoding error: {0}": "디코딩 오류: {0}"
+}
