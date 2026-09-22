@@ -243,19 +243,27 @@ messages and the panel's own buttons. Another language is one more file of each 
 
 ## Releasing
 
-Pushing a `v*` tag runs the tests, packages the extension, publishes it to whichever
-marketplaces have a token, and attaches the `.vsix` to a GitHub release. The tag has to match
-`version` in `package.json` or the workflow stops before doing any of it.
+Tag the release and let the workflow build it:
 
 ```
 npm version 0.2.2 --no-git-tag-version
 git commit -am "release: 0.2.2" && git tag v0.2.2 && git push --follow-tags
 ```
 
-A marketplace whose token is missing is skipped rather than failing the run, so this works
-before any token exists -- the release and its `.vsix` still appear on GitHub.
+That runs the tests, packages the extension and attaches the `.vsix` to a GitHub release. The
+tag has to match `version` in `package.json` or the workflow stops before doing any of it.
 
-### The two tokens
+Then put that `.vsix` on the Marketplace by hand, through *Manage Publishers & Extensions* →
+the extension's `...` menu → *Update*. No credential is involved: the browser session is the
+credential. `npm run package` builds the same file locally if you would rather not wait for
+the workflow.
+
+### Publishing from CI instead (optional)
+
+A CI runner has no browser session, so it needs a token of its own to prove who it is. Supply
+one and the same tag push also publishes; leave it out and that marketplace is skipped without
+failing the run. Worth setting up only if releases get frequent enough that the manual upload
+grates.
 
 `VSCE_PAT` publishes to the Visual Studio Marketplace. Create it at
 <https://dev.azure.com/_usersSettings/tokens>, signed in as the same account that owns the
@@ -282,13 +290,7 @@ gh secret set VSCE_PAT --repo amophi/android-panel
 gh secret set OVSX_PAT --repo amophi/android-panel
 ```
 
-Each command prompts for the value and reads it from the terminal. To publish by hand instead
-of tagging:
-
-```
-npx @vscode/vsce publish --no-dependencies
-npx ovsx publish android-panel.vsix
-```
+Each command prompts for the value and reads it from the terminal.
 
 ## License
 
