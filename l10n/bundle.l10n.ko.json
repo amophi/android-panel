@@ -16,6 +16,12 @@
   "Launch app": "앱 실행",
   "Reconnect": "다시 연결",
   "Fit to width / show all": "너비에 맞추기 / 전체 보기",
+  "Choose an app": "앱 고르기",
+  "Search": "검색",
+  "No apps found": "앱이 없습니다",
+  "Reading the app list…": "앱 목록을 읽는 중…",
+  "Could not start {0}": "{0} 을 실행하지 못했습니다",
+  "Could not read the screen size. Set newDisplay instead.": "화면 크기를 읽지 못했습니다. newDisplay 를 직접 넣어주세요.",
   "Waiting for the device screen…": "기기 화면을 기다리는 중…",
   "This editor does not support WebCodecs. Change mode to screencap in the settings.": "이 에디터는 WebCodecs 를 지원하지 않습니다. 설정에서 mode 를 screencap 으로 바꾸세요.",
   "Decoding error: {0}": "디코딩 오류: {0}"

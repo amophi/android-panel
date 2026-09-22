@@ -9,6 +9,9 @@
   "capabilities.untrustedWorkspaces": "`androidPanel.adbPath` 가 가리키는 `adb` 실행 파일을 그대로 실행하므로, 작업 공간이 엉뚱한 프로그램을 가리킬 수 있다.",
   "capabilities.virtualWorkspaces": "`adb` 와 `scrcpy-server` 파일이 로컬 디스크에 있어야 한다.",
 
+  "config.show": "패널에 무엇을 띄울지.\n\n`phone`: 기기 본체 화면 전체. 모든 것이 동작하지만 잠금화면도 같이 비치고 지문은 패널에서 누를 수 없으므로, 기기를 손으로 한 번 풀어야 한다. 패널이 열려 있는 동안 저절로 다시 잠기지는 않는다.\n\n`app`: 앱 하나에 전용 화면을 주고 기기 본체 화면은 비워둔다. 잠금화면이 끼어들지 않으므로 기기는 잠긴 채로 둘 수 있다. 앱은 패널의 앱 버튼으로 고른다.",
+  "config.show.phone": "기기 본체 화면을 비춘다. 폰 전체를 쓸 수 있지만 잠금을 풀어야 한다.",
+  "config.show.app": "앱 하나에 전용 화면을 준다. 기기가 잠겨 있어도 된다.",
   "config.mode": "`stream`: scrcpy 서버로 가상 디스플레이를 만들어 H.264 로 받는다. 기기 본체 화면은 자유롭다.\n\n`screencap`: 기기 본체 화면을 주기적으로 캡처한다. scrcpy 가 없어도 되지만 기기를 점유한다.",
   "config.mode.stream": "scrcpy 의 H.264 스트림을 디코딩한다. `scrcpy-server` 파일과 WebCodecs 를 지원하는 에디터가 필요하다.",
   "config.mode.screencap": "`adb exec-out screencap` 을 주기적으로 읽는다. `adb` 만 있으면 되지만 물리 디스플레이만 찍을 수 있다.",
@@ -19,7 +22,7 @@
   "config.serial": "쓸 기기의 시리얼. 비워두면 자동으로 고른다(에뮬레이터보다 실물 기기를 먼저).",
   "config.scrcpyServerPath": "`stream` 모드에서 쓸 `scrcpy-server` 파일 경로. scrcpy 배포본에 같이 들어있다. 비워두면 `adb` 와 같은 곳들을 훑어 찾는다.",
   "config.scrcpyVersion": "`scrcpy-server` 파일의 버전. 비워두면 서버 파일 옆의 scrcpy 실행 파일에게 물어 자동으로 알아낸다. 값이 서버와 다르면 연결이 거부된다.",
-  "config.newDisplay": "`stream` 모드에서 만들 가상 디스플레이. 예: `1440x3120/560`. 비우면 기기 본체 화면을 비춘다.\n\n기기의 실제 밀도와 맞추지 않으면 화면 오른쪽이 잘릴 수 있다(`adb shell wm density` 로 확인).",
+  "config.newDisplay": "`show` 가 `app` 일 때 만들 화면. 예: `1440x3120/560`. 비우면 기기 본체의 크기와 밀도를 그대로 쓴다. 기기의 앱들이 기대하는 값이라 그게 안전하고, 밀도가 어긋나면 화면 오른쪽이 잘린다.",
   "config.maxFps": "`stream` 모드의 초당 프레임 상한. 0이면 제한하지 않는다.",
   "config.keepStreamWhenHidden": "`stream` 모드에서 패널을 숨겨도 스트림을 유지한다. 끄면 가상 디스플레이가 사라지면서 앱이 종료되므로, 다시 열 때 처음부터 시작된다.",
   "config.maxSize": "`stream` 모드에서 인코딩할 화면의 긴 변 상한(픽셀). 기기에서 미리 줄여 보내므로 전송량과 디코딩 부하가 크게 준다. 사이드바 폭보다 넉넉하면 화질 차이는 느껴지지 않는다. 0이면 줄이지 않는다.",

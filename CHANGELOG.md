@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.0
+
+- The panel is now two explicit modes, chosen with `androidPanel.show`. `phone` mirrors the
+  device's own screen: the whole phone, but the keyguard is mirrored too, so it has to be
+  unlocked by hand once. `app` gives one app a display of its own and leaves the real screen
+  free, which works while the device stays locked. Previously the two were distinguished only
+  by whether `newDisplay` happened to be set.
+- In `app` mode an empty `newDisplay` is derived from the device's own size and density,
+  preferring an override density over the physical one. Hand-written values were the usual
+  cause of a cropped right edge.
+- The panel has an app button. It lists every launchable activity on the device, filters as
+  you type, starts the chosen app on the display in use and remembers it. adb cannot resolve
+  an app's label -- `labelRes` is a resource id and `nonLocalizedLabel` is null for every
+  activity -- so names are guessed from the package id, with the id shown alongside.
+
 ## 0.1.2
 
 - `androidPanel.package` now accepts a component (`package/activity`) and starts it as given,

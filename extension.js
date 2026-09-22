@@ -29,6 +29,7 @@ function config() {
   const c = vscode.workspace.getConfiguration('androidPanel');
   return {
     mode: c.get('mode') || 'stream',
+    show: c.get('show') === 'app' ? 'app' : 'phone',
     adb: (c.get('adbPath') || '').trim() || RESOLVED.adb || 'adb',
     pkg: (c.get('package') || '').trim(),
     interval: Math.max(150, c.get('intervalMs') || 600),
@@ -175,6 +176,76 @@ async function detectVersion(serverPath) {
   return null;
 }
 
+/**
+ * A virtual display needs a size and a density, and the device's own are the only values
+ * guaranteed to match its apps. Getting the density wrong crops the right edge of the screen.
+ */
+async function deviceDisplaySpec(bin, serial) {
+  const [size, density] = await Promise.all([
+    adb(bin, ['-s', serial, 'shell', 'wm', 'size']),
+    adb(bin, ['-s', serial, 'shell', 'wm', 'density']),
+  ]);
+  // An override is the value in force; the physical one is only a fallback.
+  const pick = (text, what) => {
+    const over = new RegExp('Override ' + what + ':\\s*(\\S+)').exec(text);
+    const phys = new RegExp('Physical ' + what + ':\\s*(\\S+)').exec(text);
+    return (over || phys || [])[1] || null;
+  };
+  const wh = pick(size, 'size');
+  const dpi = pick(density, 'density');
+  return wh && dpi && /^\d+x\d+$/.test(wh) && /^\d+$/.test(dpi) ? wh + '/' + dpi : null;
+}
+
+// Segments that say nothing about which app this is.
+const PACKAGE_NOISE = new Set([
+  'com', 'org', 'net', 'io', 'co', 'kr', 'jp', 'cn', 'us', 'de', 'me', 'tv',
+  'android', 'google', 'samsung', 'sec', 'apps', 'app', 'mobile', 'client',
+  'ad', 'ads', 'free', 'lite', 'main',
+]);
+
+/**
+ * adb cannot resolve an app's label: labelRes is a resource id and nonLocalizedLabel comes
+ * back null for every activity, so a name has to be guessed from the package id.
+ *
+ * The last segment alone is often the least informative part -- com.mxtech.videoplayer.ad
+ * would read as "Ad". Boilerplate and store-code segments are dropped and the longest of
+ * what remains is used, which keeps "Videoplayer" and "Chrome" and falls back to the last
+ * segment when everything was dropped.
+ */
+function appName(pkg) {
+  const parts = pkg.split('.').filter(Boolean);
+  const meaningful = parts.filter((s) => {
+    if (PACKAGE_NOISE.has(s.toLowerCase())) return false;
+    // Store ids such as A000Z00040 or v2 carry no meaning either.
+    return !/\d/.test(s) || /[a-z]{4}/.test(s);
+  });
+  const pool = meaningful.length ? meaningful : parts;
+  const pick = pool.reduce((best, s) => (s.length > best.length ? s : best), '');
+  const label = (pick || pkg).replace(/[_-]+/g, ' ').trim();
+  return label ? label.charAt(0).toUpperCase() + label.slice(1) : pkg;
+}
+
+/** Every launchable activity on the device, with the user's own apps first. */
+async function appList(bin, serial) {
+  const out = await adb(bin, ['-s', serial, 'shell', 'cmd', 'package', 'query-activities',
+    '--brief', '-a', 'android.intent.action.MAIN', '-c', 'android.intent.category.LAUNCHER']);
+  const components = [...new Set(out.match(/[a-zA-Z0-9_.]+\/[a-zA-Z0-9_.$]+/g) || [])];
+  let installed = new Set();
+  try {
+    const listed = await adb(bin, ['-s', serial, 'shell', 'pm', 'list', 'packages', '-3']);
+    installed = new Set(listed.split(/\r?\n/)
+      .map((l) => l.replace('package:', '').trim()).filter(Boolean));
+  } catch (_) {
+    /* ordering only */
+  }
+  return components
+    .map((component) => {
+      const pkg = packageOf(component);
+      return { component, pkg, name: appName(pkg), user: installed.has(pkg) };
+    })
+    .sort((a, b) => Number(b.user) - Number(a.user) || a.name.localeCompare(b.name));
+}
+
 /** `androidPanel.package` may name a component (`pkg/activity`); this is the package half. */
 function packageOf(spec) {
   return spec.split('/')[0];
@@ -300,12 +371,21 @@ class ScreenView {
         return this.status(t('Could not determine the scrcpy version. Set scrcpyVersion manually.'), 'error');
       }
     }
+    // "phone" mirrors the device's own screen; "app" gets a display of its own.
+    let newDisplay = null;
+    if (c.show === 'app') {
+      newDisplay = c.newDisplay || (await deviceDisplaySpec(c.adb, this.serial));
+      if (!newDisplay) {
+        this.started = false;
+        return this.status(t('Could not read the screen size. Set newDisplay instead.'), 'error');
+      }
+    }
     const s = new ScrcpyStream({
       adb: c.adb,
       serverPath: c.serverPath,
       serial: this.serial,
       version: version,
-      newDisplay: c.newDisplay || null,
+      newDisplay: newDisplay,
       maxFps: c.maxFps,
       maxSize: c.maxSize,
       stayAwake: c.stayAwake,
@@ -499,6 +579,31 @@ class ScreenView {
     }
   }
 
+  async sendApps() {
+    if (!this.serial) return this.post({ type: 'apps', list: [] });
+    const c = config();
+    try {
+      this.post({ type: 'apps', list: await appList(c.adb, this.serial) });
+    } catch (_) {
+      this.post({ type: 'apps', list: [] });
+    }
+  }
+
+  /** Starting an app from the picker also remembers it, so the panel reopens on it. */
+  async startApp(component) {
+    if (!component || !this.serial) return;
+    const c = config();
+    try {
+      const args = ['-s', this.serial, 'shell', 'am', 'start'];
+      if (this.displayId !== null) args.push('--display', String(this.displayId));
+      await adb(c.adb, [...args, '-n', component]);
+      await vscode.workspace.getConfiguration('androidPanel')
+        .update('package', component, vscode.ConfigurationTarget.Global);
+    } catch (_) {
+      this.status(t('Could not start {0}', component), 'error');
+    }
+  }
+
   onMessage(m) {
     switch (m.type) {
       case 'tap':
@@ -518,6 +623,12 @@ class ScreenView {
       case 'launch':
         this.launch();
         break;
+      case 'apps':
+        this.sendApps();
+        break;
+      case 'start':
+        this.startApp(m.component);
+        break;
       case 'reconnect':
         this.stop();
         this.start();
@@ -534,6 +645,10 @@ class ScreenView {
       launch: t('Launch app'),
       reconnect: t('Reconnect'),
       fit: t('Fit to width / show all'),
+      apps: t('Choose an app'),
+      search: t('Search'),
+      noApps: t('No apps found'),
+      loading: t('Reading the app list…'),
       waiting: t('Waiting for the device screen…'),
       noWebCodecs: t('This editor does not support WebCodecs. Change mode to screencap in the settings.'),
       decodeError: t('Decoding error: {0}'),
@@ -581,6 +696,26 @@ class ScreenView {
   #screen, #shot { max-width: 100%; max-height: 100%; object-fit: contain; cursor: pointer; display: none; }
   #wrap.wide #screen, #wrap.wide #shot { width: 100%; height: auto; max-height: none; }
   #empty { opacity: .6; padding: 16px; text-align: center; line-height: 1.6; }
+  #picker {
+    position: absolute; inset: 0; display: none; flex-direction: column;
+    background: var(--vscode-sideBar-background); z-index: 2;
+  }
+  #picker.open { display: flex; }
+  #filter {
+    margin: 6px; padding: 4px 6px; font: inherit; flex: 0 0 auto;
+    color: var(--vscode-input-foreground, inherit);
+    background: var(--vscode-input-background, transparent);
+    border: 1px solid var(--vscode-input-border, rgba(128,128,128,.4));
+    border-radius: 3px;
+  }
+  #list { flex: 1 1 auto; overflow-y: auto; }
+  #list div {
+    padding: 5px 8px; cursor: pointer; line-height: 1.3;
+    border-bottom: 1px solid var(--vscode-panel-border, transparent);
+  }
+  #list div:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,.2)); }
+  #list b { font-weight: 600; }
+  #list span { display: block; opacity: .55; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -589,6 +724,7 @@ class ScreenView {
     <button id="home" title="${esc(ui.home)}">⌂</button>
     <button id="app" title="${esc(ui.launch)}">▶</button>
     <button id="again" title="${esc(ui.reconnect)}">↻</button>
+    <button id="apps" title="${esc(ui.apps)}">⊞</button>
     <button id="fit" title="${esc(ui.fit)}">⤢</button>
     <span id="status"></span>
   </div>
@@ -596,6 +732,10 @@ class ScreenView {
     <canvas id="screen"></canvas>
     <img id="shot" alt="">
     <div id="empty">${esc(ui.waiting)}</div>
+    <div id="picker">
+      <input id="filter" type="text" placeholder="${esc(ui.search)}">
+      <div id="list"></div>
+    </div>
   </div>
 <script nonce="${nonce}">
 (function () {
@@ -671,6 +811,9 @@ class ScreenView {
       show(shot);
     } else if (m.type === 'size') {
       dev = { w: m.w, h: m.h };
+    } else if (m.type === 'apps') {
+      apps = m.list || [];
+      renderApps();
     } else if (m.type === 'status') {
       status.textContent = m.text;
       status.className = m.kind === 'error' ? 'error' : '';
@@ -722,6 +865,47 @@ class ScreenView {
   document.getElementById('home').onclick = () => vs.postMessage({ type: 'key', code: 3 });
   document.getElementById('app').onclick = () => vs.postMessage({ type: 'launch' });
   document.getElementById('again').onclick = () => vs.postMessage({ type: 'reconnect' });
+
+  // The app picker. Names come from package ids, so the filter matters more than usual.
+  const picker = document.getElementById('picker');
+  const filter = document.getElementById('filter');
+  const list = document.getElementById('list');
+  let apps = null;
+
+  function renderApps() {
+    const q = filter.value.trim().toLowerCase();
+    list.textContent = '';
+    if (apps === null) { list.textContent = S.loading; return; }
+    const shown = apps.filter((a) =>
+      !q || a.name.toLowerCase().indexOf(q) >= 0 || a.pkg.toLowerCase().indexOf(q) >= 0);
+    if (!shown.length) { list.textContent = S.noApps; return; }
+    for (const a of shown.slice(0, 300)) {
+      const row = document.createElement('div');
+      const b = document.createElement('b');
+      b.textContent = a.name;
+      const s = document.createElement('span');
+      s.textContent = a.pkg;
+      row.appendChild(b);
+      row.appendChild(s);
+      row.onclick = () => {
+        vs.postMessage({ type: 'start', component: a.component });
+        picker.classList.remove('open');
+      };
+      list.appendChild(row);
+    }
+  }
+
+  filter.oninput = renderApps;
+  filter.onkeydown = (e) => { if (e.key === 'Escape') picker.classList.remove('open'); };
+  document.getElementById('apps').onclick = () => {
+    const open = picker.classList.toggle('open');
+    if (!open) return;
+    filter.value = '';
+    apps = null;
+    renderApps();
+    vs.postMessage({ type: 'apps' });
+    filter.focus();
+  };
 
   // Fill the sidebar's width and scroll, or shrink until the whole screen fits.
   const wrap = document.getElementById('wrap');

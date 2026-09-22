@@ -9,6 +9,9 @@
   "capabilities.untrustedWorkspaces": "The extension runs the `adb` executable named by `androidPanel.adbPath`, which a workspace could point at an arbitrary program.",
   "capabilities.virtualWorkspaces": "The extension needs `adb` and the `scrcpy-server` file on a local disk.",
 
+  "config.show": "What the panel shows.\n\n`phone`: the device's own screen, all of it. Everything works, but the keyguard is mirrored along with it and a fingerprint cannot be pressed from the panel, so unlock the device once by hand. It will not lock itself again while the panel is open.\n\n`app`: one app on a display of its own, leaving the device's own screen free. The keyguard never gets in the way, so the device can stay locked. Pick the app with the panel's app button.",
+  "config.show.phone": "Mirror the device's own screen. The whole phone, but it has to be unlocked.",
+  "config.show.app": "Give one app a display of its own. Works while the device is locked.",
   "config.mode": "`stream`: create a virtual display through the scrcpy server and receive it as H.264. The device's own screen stays free.\n\n`screencap`: poll the device's own screen. Works without scrcpy, but occupies the device.",
   "config.mode.stream": "Decode the scrcpy H.264 stream. Needs the `scrcpy-server` file and an editor whose Chromium provides WebCodecs.",
   "config.mode.screencap": "Poll `adb exec-out screencap`. Needs nothing but `adb`, and can only read physical displays.",
@@ -19,7 +22,7 @@
   "config.serial": "Serial of the device to use. Leave empty to pick automatically, preferring physical devices over emulators.",
   "config.scrcpyServerPath": "`stream` mode: path to the `scrcpy-server` file, which ships inside a scrcpy release. Leave empty to search the same places as `adb`.",
   "config.scrcpyVersion": "Version of the `scrcpy-server` file. Leave empty to ask the `scrcpy` binary sitting next to it. A value that does not match the server file is refused by the server.",
-  "config.newDisplay": "`stream` mode: virtual display to create, e.g. `1440x3120/560`. Leave empty to mirror the device's own screen.\n\nMatch the device's real density or the right edge of the screen may be cut off (check with `adb shell wm density`).",
+  "config.newDisplay": "The display to create when `show` is `app`, e.g. `1440x3120/560`. Leave empty to copy the device's own size and density, which is what its apps expect; a density that does not match crops the right edge of the screen.",
   "config.maxFps": "`stream` mode: cap on frames per second. 0 does not cap.",
   "config.keepStreamWhenHidden": "`stream` mode: keep the stream running while the panel is hidden. Turning this off destroys the virtual display, which kills the app with it, so reopening the panel starts the app from scratch.",
   "config.maxSize": "`stream` mode: cap on the long edge of the encoded frame, in pixels. The device scales the screen down before encoding, which cuts bandwidth and decoding cost sharply. Anything wider than the sidebar looks the same. 0 does not scale.",

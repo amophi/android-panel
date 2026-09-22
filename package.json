@@ -3,7 +3,7 @@
   "displayName": "Android Panel",
   "description": "%extension.description%",
   "icon": "icon.png",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "publisher": "amophi",
   "license": "MIT",
   "homepage": "https://github.com/amophi/android-panel#readme",
@@ -79,6 +79,19 @@
     "configuration": {
       "title": "Android Panel",
       "properties": {
+        "androidPanel.show": {
+          "type": "string",
+          "enum": [
+            "phone",
+            "app"
+          ],
+          "default": "phone",
+          "markdownDescription": "%config.show%",
+          "markdownEnumDescriptions": [
+            "%config.show.phone%",
+            "%config.show.app%"
+          ]
+        },
         "androidPanel.adbPath": {
           "type": "string",
           "default": "",

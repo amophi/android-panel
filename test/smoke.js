@@ -87,7 +87,7 @@ for (const language of ['en', 'ko']) {
     let parsed = null;
     try { parsed = JSON.parse(table[1]); } catch (_) { /* the next check reports it */ }
     check('the string table is valid JSON', !!parsed);
-    check('it holds every webview string', parsed && Object.keys(parsed).length === 8,
+    check('it holds every webview string', parsed && Object.keys(parsed).length === 12,
       parsed && Object.keys(parsed).length + ' keys');
   }
   check('the decoder error keeps its placeholder', /decodeError[^,]*\{0\}/.test(html));
