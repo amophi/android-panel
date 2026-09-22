@@ -246,9 +246,14 @@ messages and the panel's own buttons. Another language is one more file of each 
 Tag the release and let the workflow build it:
 
 ```
-npm version 0.2.2 --no-git-tag-version
-git commit -am "release: 0.2.2" && git tag v0.2.2 && git push --follow-tags
+npm version 0.2.3 --no-git-tag-version
+git commit -am "release: 0.2.3"
+git tag -a v0.2.3 -m "0.2.3"
+git push --follow-tags
 ```
+
+The `-a` matters: `--follow-tags` pushes annotated tags only, so a plain `git tag` is left
+behind on the machine and the workflow never fires.
 
 That runs the tests, packages the extension and attaches the `.vsix` to a GitHub release. The
 tag has to match `version` in `package.json` or the workflow stops before doing any of it.
