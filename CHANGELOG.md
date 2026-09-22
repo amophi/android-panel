@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.2
+
+- `androidPanel.package` now accepts a component (`package/activity`) and starts it as given.
+  A home app registers no launcher entry, so a package name alone resolves to nothing and the
+  device's own launcher could not be started. Naming it outright fills a virtual display with
+  the real home screen and every app on it, which is what makes the panel usable as a phone
+  rather than as a window onto one app.
+
 ## 0.1.1
 
 - Wake the device when the panel starts, and again if a screen timeout puts it back to sleep.

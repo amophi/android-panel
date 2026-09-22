@@ -14,7 +14,7 @@
   "config.mode.screencap": "Poll `adb exec-out screencap`. Needs nothing but `adb`, and can only read physical displays.",
 
   "config.adbPath": "Path to the `adb` executable. Leave empty to look on `PATH`, in `%LOCALAPPDATA%\\scrcpy`, in the Android SDK's `platform-tools`, and in the usual Unix locations.",
-  "config.package": "Package name to launch when the panel opens. Leave empty to mirror whatever is on screen.",
+  "config.package": "Package to launch when the panel opens. Leave empty to show whatever is already on the display.\n\nA component (`package/activity`) is started as given, which is how a home app is launched: home apps register no launcher entry, so nothing can be resolved from their package alone. Putting the device's launcher here fills a virtual display with the real home screen and every app on it.",
   "config.intervalMs": "`screencap` mode: how often to re-read the screen, in milliseconds. Lower is smoother but costs more.",
   "config.serial": "Serial of the device to use. Leave empty to pick automatically, preferring physical devices over emulators.",
   "config.scrcpyServerPath": "`stream` mode: path to the `scrcpy-server` file, which ships inside a scrcpy release. Leave empty to search the same places as `adb`.",

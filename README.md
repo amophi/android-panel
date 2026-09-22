@@ -102,6 +102,14 @@ is read from the `scrcpy` binary next to the server file.
 When `androidPanel.package` is set, device selection prefers a device that actually has that
 package installed — useful when an emulator is running alongside a phone.
 
+A `package/activity` component is started exactly as written. That matters for home apps,
+which register no launcher entry and so cannot be resolved from a package name: pointing
+`androidPanel.package` at the device's launcher, such as
+`com.sec.android.app.launcher/.activities.LauncherActivity`, puts the real home screen on
+the virtual display with every installed app reachable from it. Without it the display
+falls back to whatever secondary launcher the vendor supplies, which on Samsung is the DeX
+one and shows only a handful of apps.
+
 ## Controls
 
 | Action | Effect |

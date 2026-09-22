@@ -139,7 +139,7 @@ async function pickSerial(bin, pkg) {
   if (!pkg) return ready[0];
   for (const s of ready) {
     try {
-      const r = await adb(bin, ['-s', s, 'shell', 'pm', 'path', pkg]);
+      const r = await adb(bin, ['-s', s, 'shell', 'pm', 'path', packageOf(pkg)]);
       if (r.includes('package:')) return s;
     } catch (_) {
       /* try the next device */
@@ -173,6 +173,11 @@ async function detectVersion(serverPath) {
     }
   }
   return null;
+}
+
+/** `androidPanel.package` may name a component (`pkg/activity`); this is the package half. */
+function packageOf(spec) {
+  return spec.split('/')[0];
 }
 
 /** Finds a package's launcher activity. Starting it on a virtual display needs the component name. */
@@ -408,7 +413,7 @@ class ScreenView {
       if (!c.pkg) return;
       const acts = await adb(c.adb, ['-s', this.serial, 'shell', 'dumpsys', 'activity', 'activities']);
       const at = acts.indexOf('Display #' + this.displayId + ' ');
-      if (at >= 0 && acts.slice(at, at + 800).indexOf(c.pkg) < 0) await this.launch();
+      if (at >= 0 && acts.slice(at, at + 800).indexOf(packageOf(c.pkg)) < 0) await this.launch();
     } catch (_) {
       /* look again next round */
     }
@@ -472,7 +477,11 @@ class ScreenView {
     if (!c.pkg) return;
     try {
       if (this.displayId !== null) {
-        const comp = await launcherActivity(c.adb, this.serial, c.pkg);
+        // A home app carries no LAUNCHER category, so resolve-activity finds nothing for it.
+        // Naming the activity outright is the only way to start one on a virtual display.
+        const comp = c.pkg.indexOf('/') >= 0
+          ? c.pkg
+          : await launcherActivity(c.adb, this.serial, c.pkg);
         if (comp) {
           await adb(c.adb, [
             '-s', this.serial, 'shell', 'am', 'start',
@@ -482,7 +491,7 @@ class ScreenView {
         }
       }
       await adb(c.adb, [
-        '-s', this.serial, 'shell', 'monkey', '-p', c.pkg,
+        '-s', this.serial, 'shell', 'monkey', '-p', packageOf(c.pkg),
         '-c', 'android.intent.category.LAUNCHER', '1',
       ]);
     } catch (_) {
