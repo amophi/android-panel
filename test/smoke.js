@@ -53,7 +53,14 @@ function page(language, overrides) {
   try {
     delete require.cache[path.join(ROOT, 'extension.js')];
     delete require.cache[path.join(ROOT, 'scrcpy.js')];
-    require(path.join(ROOT, 'extension.js')).activate({ subscriptions: [] });
+    const store = {};
+    require(path.join(ROOT, 'extension.js')).activate({
+      subscriptions: [],
+      globalState: {
+        get: (k, d) => (k in store ? store[k] : d),
+        update: async (k, v) => { store[k] = v; },
+      },
+    });
     return provider.html();
   } finally {
     Module._load = load;

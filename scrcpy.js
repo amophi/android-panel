@@ -28,6 +28,10 @@ const MAX_PACKET = 16 * 1024 * 1024;
 // The 'closed' event carries a reason code ('server-exited', 'stream-ended',
 // 'stream-corrupt') or, for socket errors, the raw message. The caller turns the
 // codes into localized text, so this file stays free of vscode and of UI strings.
+//
+// `scid` names one server and is generated in the constructor rather than in start(), so the
+// caller can write it down before anything is running. Cleanup only ever touches scids it was
+// handed: another scrcpy session on the same device is none of our business.
 class ScrcpyStream extends EventEmitter {
   /**
    * @param {object} o
@@ -39,11 +43,14 @@ class ScrcpyStream extends EventEmitter {
    * @param {number} o.maxFps        0 for no cap
    * @param {number} o.maxSize       cap on the encoded long edge; scaling on the device lowers the load
    * @param {boolean} o.stayAwake    keep the device from sleeping while it charges
+   * @param {string[]} o.knownScids  scids this client started before; the only ones it cleans
    */
   constructor(o) {
     super();
     this.o = o;
-    this.scid = null;
+    // The server reads this with Integer.parseInt(scid, 16), so it must fit a signed 32-bit int.
+    this.scid = (crypto.randomBytes(4).readUInt32BE(0) & 0x7fffffff)
+      .toString(16).padStart(8, '0');
     this.server = null; // net.Server
     this.socket = null;
     this.proc = null; // the adb shell process
@@ -65,26 +72,23 @@ class ScrcpyStream extends EventEmitter {
   }
 
   /**
-   * Clears away the servers and tunnels an earlier run left behind.
+   * Clears away the servers and tunnels our own earlier runs left behind.
    * A surviving server keeps an unused virtual display alive, and the next run then puts the
    * app on the wrong display, leaving the panel showing an empty secondary launcher.
+   *
+   * Only the scids in `knownScids` are touched. Sweeping every server and every scrcpy_*
+   * tunnel would also take out a scrcpy session the user is running alongside the panel.
    */
   async cleanupOrphans() {
-    await this.exec(['shell', 'pkill', '-f', SERVER_CLASS]).catch(() => {});
-    const list = await this.exec(['reverse', '--list']).catch(() => '');
-    for (const line of String(list).split('\n')) {
-      const m = /localabstract:(scrcpy_[0-9a-f]+)/.exec(line);
-      if (m) await this.exec(['reverse', '--remove', 'localabstract:' + m[1]]).catch(() => {});
+    for (const scid of this.o.knownScids || []) {
+      if (scid === this.scid) continue;
+      await this.exec(['shell', 'pkill', '-f', `scid=${scid}`]).catch(() => {});
+      await this.exec(['reverse', '--remove', `localabstract:scrcpy_${scid}`]).catch(() => {});
     }
   }
 
   async start() {
     await this.cleanupOrphans();
-
-    // The server reads this with Integer.parseInt(scid, 16), so it must fit a signed 32-bit int.
-    const n = crypto.randomBytes(4).readUInt32BE(0) & 0x7fffffff;
-    this.scid = n.toString(16).padStart(8, '0');
-
     await this.exec(['push', this.o.serverPath, REMOTE_JAR]);
 
     // Let the OS pick the port, then aim the reverse tunnel at it.

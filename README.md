@@ -196,12 +196,16 @@ coordinates. The panel asks the device with `wm size -d <id>` rather than reusin
 
 ## Cleaning up after itself
 
-Killing the local `adb shell` does not kill the server process on the device. A leaked server keeps
+Killing the local `adb shell` does not reliably kill the server process on the device, so the
+client does not depend on it either way. A leaked server keeps
 its virtual display alive, and the next run then launches the app onto a *different* display while
 the panel streams the stale one — the symptom is a panel showing an empty secondary launcher.
 
-The client therefore kills its own server by `scid` on shutdown, and sweeps any orphaned servers and
-`scrcpy_*` reverse tunnels on startup. A health check every eight seconds confirms the display still
+The client therefore kills its own server by `scid` on shutdown, and on startup cleans up after
+whichever of its own earlier runs did not get that far. It knows which those are because it
+generates the `scid` and records it before starting anything, so cleanup never has to guess:
+sweeping every server and every `scrcpy_*` tunnel would take out a scrcpy session running
+alongside the panel, which is measurably what used to happen to that session's tunnel. A health check every eight seconds confirms the display still
 exists and the configured package is still on top of it, restarting or relaunching if not.
 
 ## Behaviour notes

@@ -12,6 +12,10 @@ const VIEW_ID = 'androidPanel.screen';
 // the problem -- being asleep is.
 const KEY_WAKEUP = 'KEYCODE_WAKEUP';
 
+// Servers this panel has started, so a later run can clean up after a crash without touching
+// a scrcpy session the user is running alongside it.
+const SCIDS_KEY = 'startedScids';
+
 /** User-facing text. English is the source language; l10n/bundle.l10n.*.json overlays translations. */
 const t = (message, ...args) => vscode.l10n.t(message, ...args);
 
@@ -363,11 +367,21 @@ class ScreenView {
       this.health = null;
     }
     if (this.stream) {
-      this.stream.stop().catch(() => {});
+      const gone = this.stream.scid;
+      this.stream.stop()
+        .then(() => this.forget(gone))
+        .catch(() => {});
       this.stream = null;
     }
     this.displayId = null;
     this.configPacket = null;
+  }
+
+  /** Drops a scid we have finished cleaning, so the list cannot grow without bound. */
+  async forget(scid) {
+    const known = this.context.globalState.get(SCIDS_KEY, []);
+    if (!known.includes(scid)) return;
+    await this.context.globalState.update(SCIDS_KEY, known.filter((s) => s !== scid));
   }
 
   // ---------- stream mode: virtual display + H.264 ----------
@@ -394,17 +408,21 @@ class ScreenView {
         return this.status(t('Could not read the screen size. Set newDisplay instead.'), 'error');
       }
     }
+    const known = this.context.globalState.get(SCIDS_KEY, []);
     const s = new ScrcpyStream({
       adb: c.adb,
       serverPath: c.serverPath,
       serial: this.serial,
       version: version,
       newDisplay: newDisplay,
+      knownScids: known,
       maxFps: c.maxFps,
       maxSize: c.maxSize,
       stayAwake: c.stayAwake,
     });
     this.stream = s;
+    // Written down before the server starts: one that dies in between is still ours to clean.
+    await this.context.globalState.update(SCIDS_KEY, [...new Set([...known, s.scid])]);
 
     s.on('display', async (id) => {
       this.displayId = id;
@@ -437,6 +455,9 @@ class ScreenView {
 
     try {
       await s.start();
+      // cleanupOrphans() has dealt with every earlier scid by now, so ours is the only one
+      // left to remember. Without this the list would grow with every crash.
+      await this.context.globalState.update(SCIDS_KEY, [s.scid]);
       this.status(t('{0} · connecting…', this.serial));
       this.warnIfLocked();
       // The display can vanish and the app can be pushed aside, so check in periodically.

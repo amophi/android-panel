@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.3
+
+- Startup cleanup no longer disturbs a scrcpy session running alongside the panel. It used
+  to kill every scrcpy server on the device and remove every `scrcpy_*` reverse tunnel;
+  measured against a separate session on the same phone, the tunnel sweep took that
+  session's tunnel with it. The `scid` is ours to generate, so it is now recorded before
+  the server starts and cleanup only ever touches scids the panel wrote down.
+- The recorded list is reset once a run is up and forgotten on a clean shutdown, so it
+  cannot grow with every crash.
+
 ## 0.2.2
 
 Documentation and release plumbing only; the extension itself is unchanged from 0.2.1.
