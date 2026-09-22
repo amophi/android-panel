@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.2
+
+Documentation and release plumbing only; the extension itself is unchanged from 0.2.1.
+
+- The readme covers the two modes, the app button and installing from a GitHub release,
+  and it no longer presents publishing from CI as the normal path -- uploading the `.vsix`
+  through the Marketplace needs no credential at all, because the browser session is the
+  credential.
+- The release workflow skips a marketplace whose token is absent instead of failing, and
+  creates the Open VSX namespace on the first publish, since nothing can be published into
+  one that does not exist yet.
+
 ## 0.2.1
 
 - `phone` mode says so when the device is locked. Mirroring a locked device shows the keyguard
