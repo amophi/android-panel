@@ -21,6 +21,7 @@
   "No apps found": "앱이 없습니다",
   "Reading the app list…": "앱 목록을 읽는 중…",
   "Could not start {0}": "{0} 을 실행하지 못했습니다",
+  "The device is locked, so only the lock screen is mirrored. Unlock it on the device, or set androidPanel.show to app.": "기기가 잠겨 있어 잠금화면만 비칩니다. 기기에서 잠금을 풀거나, androidPanel.show 를 app 으로 바꾸세요.",
   "Could not read the screen size. Set newDisplay instead.": "화면 크기를 읽지 못했습니다. newDisplay 를 직접 넣어주세요.",
   "Waiting for the device screen…": "기기 화면을 기다리는 중…",
   "This editor does not support WebCodecs. Change mode to screencap in the settings.": "이 에디터는 WebCodecs 를 지원하지 않습니다. 설정에서 mode 를 screencap 으로 바꾸세요.",

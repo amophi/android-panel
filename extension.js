@@ -177,6 +177,20 @@ async function detectVersion(serverPath) {
 }
 
 /**
+ * Whether the keyguard is up. It only matters in phone mode: there the keyguard is part of
+ * what gets mirrored, and no fingerprint can be pressed from the panel. A virtual display is
+ * a separate screen the keyguard never covers.
+ */
+async function isLocked(bin, serial) {
+  try {
+    const out = await adb(bin, ['-s', serial, 'shell', 'dumpsys', 'window']);
+    return out.indexOf('mDreamingLockscreen=true') >= 0;
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
  * A virtual display needs a size and a density, and the device's own are the only values
  * guaranteed to match its apps. Getting the density wrong crops the right edge of the screen.
  */
@@ -424,6 +438,7 @@ class ScreenView {
     try {
       await s.start();
       this.status(t('{0} · connecting…', this.serial));
+      this.warnIfLocked();
       // The display can vanish and the app can be pushed aside, so check in periodically.
       this.health = setInterval(() => this.healthCheck(), 8000);
     } catch (e) {
@@ -480,6 +495,7 @@ class ScreenView {
   async healthCheck() {
     if (!this.started || !this.stream) return;
     await this.wake(false);
+    if (await this.warnIfLocked()) return;
     if (this.displayId === null) return;
     const c = config();
     try {
@@ -579,6 +595,18 @@ class ScreenView {
     }
   }
 
+  /**
+   * Mirroring a locked device shows the keyguard and swallows everything else, including a
+   * freshly started app, which reads as the panel being broken. Warn rather than look dead.
+   */
+  async warnIfLocked() {
+    const c = config();
+    if (c.show !== 'phone' || !this.serial || !this.started) return false;
+    if (!(await isLocked(c.adb, this.serial))) return false;
+    this.status(t('The device is locked, so only the lock screen is mirrored. Unlock it on the device, or set androidPanel.show to app.'), 'warn');
+    return true;
+  }
+
   async sendApps() {
     if (!this.serial) return this.post({ type: 'apps', list: [] });
     const c = config();
@@ -594,11 +622,15 @@ class ScreenView {
     if (!component || !this.serial) return;
     const c = config();
     try {
+      // Remember it before starting it. The health check relaunches whatever the setting
+      // names, so leaving the old value in place lets it undo this within its next round.
+      await vscode.workspace.getConfiguration('androidPanel')
+        .update('package', component, vscode.ConfigurationTarget.Global);
       const args = ['-s', this.serial, 'shell', 'am', 'start'];
       if (this.displayId !== null) args.push('--display', String(this.displayId));
       await adb(c.adb, [...args, '-n', component]);
-      await vscode.workspace.getConfiguration('androidPanel')
-        .update('package', component, vscode.ConfigurationTarget.Global);
+      // It started, but behind the keyguard nothing of it can be seen.
+      await this.warnIfLocked();
     } catch (_) {
       this.status(t('Could not start {0}', component), 'error');
     }
@@ -691,6 +723,7 @@ class ScreenView {
   button:hover { background: var(--vscode-button-secondaryHoverBackground, rgba(128,128,128,.2)); }
   #status { margin-left: auto; opacity: .7; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #status.error { color: var(--vscode-errorForeground); opacity: 1; }
+  #status.warn { color: var(--vscode-editorWarning-foreground, var(--vscode-foreground)); opacity: 1; }
   #wrap { flex: 1 1 auto; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; }
   #wrap.wide { align-items: flex-start; overflow-y: auto; }
   #screen, #shot { max-width: 100%; max-height: 100%; object-fit: contain; cursor: pointer; display: none; }
@@ -816,7 +849,9 @@ class ScreenView {
       renderApps();
     } else if (m.type === 'status') {
       status.textContent = m.text;
-      status.className = m.kind === 'error' ? 'error' : '';
+      status.className = m.kind === 'error' ? 'error' : m.kind === 'warn' ? 'warn' : '';
+      status.title = m.text;
+      // A warning leaves the picture alone; the device really is showing that.
       if (m.kind === 'error') fail(m.text);
     }
   });

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.1
+
+- `phone` mode says so when the device is locked. Mirroring a locked device shows the keyguard
+  and swallows everything else, so starting an app from the picker succeeded while the panel
+  showed nothing but a lock screen -- it read as the extension being broken. The message is a
+  warning, not an error, so the picture stays up: the keyguard is genuinely what the device is
+  showing.
+
 ## 0.2.0
 
 - The panel is now two explicit modes, chosen with `androidPanel.show`. `phone` mirrors the
