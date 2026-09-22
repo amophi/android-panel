@@ -85,6 +85,7 @@ is read from the `scrcpy` binary next to the server file.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
+| `androidPanel.show` | `phone` | `phone` mirrors the device's own screen; `app` gives one app a display of its own |
 | `androidPanel.mode` | `stream` | `stream` decodes the scrcpy H.264 stream; `screencap` polls `adb exec-out screencap` |
 | `androidPanel.adbPath` | *(empty)* | Path to the `adb` executable. Empty runs the discovery above |
 | `androidPanel.scrcpyServerPath` | *(empty)* | `stream` mode: path to the `scrcpy-server` file |
@@ -137,6 +138,7 @@ will not lock itself again while the panel is open.
 | ← / ⌂ | Back / Home key events |
 | ▶ | Launch the configured package |
 | ↻ | Re-detect the device |
+| ⊞ | List the device's apps and start one here |
 | ⤢ | Toggle between fitting the whole screen and filling the panel width |
 
 ## Stream protocol
