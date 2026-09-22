@@ -11,6 +11,11 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    # Job-level so the publish steps can ask whether they have a token before running.
+    # A repository without the tokens still gets a tested, packaged GitHub release.
+    env:
+      VSCE_PAT: ${{ secrets.VSCE_PAT }}
+      OVSX_PAT: ${{ secrets.OVSX_PAT }}
     steps:
       - uses: actions/checkout@v4
 
@@ -34,14 +39,18 @@ jobs:
         run: npx --yes @vscode/vsce package --no-dependencies --out "android-panel-${GITHUB_REF_NAME}.vsix"
 
       - name: Publish to the Visual Studio Marketplace
-        env:
-          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        if: env.VSCE_PAT != ''
         run: npx --yes @vscode/vsce publish --packagePath "android-panel-${GITHUB_REF_NAME}.vsix"
 
       - name: Publish to Open VSX
-        env:
-          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        if: env.OVSX_PAT != ''
         run: npx --yes ovsx publish "android-panel-${GITHUB_REF_NAME}.vsix"
+
+      - name: Say which marketplaces were skipped
+        run: |
+          [ -n "$VSCE_PAT" ] || echo "VSCE_PAT is not set, so the Visual Studio Marketplace was skipped."
+          [ -n "$OVSX_PAT" ] || echo "OVSX_PAT is not set, so Open VSX was skipped."
+          echo "The .vsix is attached to the GitHub release either way."
 
       - name: Attach the .vsix to the GitHub release
         uses: softprops/action-gh-release@v2
