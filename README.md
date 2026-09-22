@@ -43,6 +43,19 @@ VS Code forks — Cursor, Windsurf, VSCodium, Antigravity — read [Open VSX](ht
 rather than the Microsoft marketplace. The same release goes to both, so searching the Extensions
 view works in those editors as well.
 
+### From a release
+
+Every `v*` tag attaches a built `.vsix` to a
+[GitHub release](https://github.com/amophi/android-panel/releases), which is the quickest way
+to get a specific version onto a machine that has neither git nor a marketplace it can reach:
+
+```
+gh release download v0.2.1 --repo amophi/android-panel --pattern '*.vsix'
+code --install-extension android-panel-v0.2.1.vsix
+```
+
+On a VS Code fork, substitute its own CLI -- `cursor`, `antigravity-ide`, `codium`.
+
 ### From source
 
 Clone into the editor's extensions directory and reload the window:
