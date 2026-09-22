@@ -244,9 +244,15 @@ before any token exists -- the release and its `.vsix` still appear on GitHub.
 
 ### The two tokens
 
-`VSCE_PAT` publishes to the Visual Studio Marketplace. Create it at **dev.azure.com** under
-*User settings → Personal access tokens*, signed in as the same account that owns the
-publisher. Two fields decide whether it works, and the default is wrong for both:
+`VSCE_PAT` publishes to the Visual Studio Marketplace. Create it at
+<https://dev.azure.com/_usersSettings/tokens>, signed in as the same account that owns the
+publisher.
+
+That is Azure DevOps, which is not the Azure portal: `portal.azure.com` is the cloud console
+and will ask for a subscription that this does not need. Azure DevOps is free, and being asked
+to create an organization on the way in is expected.
+
+Two fields decide whether the token works, and the default is wrong for both:
 
 - **Organization** must be *All accessible organizations*, not the single organization that is
   preselected.
