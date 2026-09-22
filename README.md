@@ -230,17 +230,41 @@ messages and the panel's own buttons. Another language is one more file of each 
 
 ## Releasing
 
-Pushing a `v*` tag packages the extension, publishes it to both marketplaces, and attaches the
-`.vsix` to a GitHub release. The tag has to match `version` in `package.json` or the workflow stops
-before publishing anything.
+Pushing a `v*` tag runs the tests, packages the extension, publishes it to whichever
+marketplaces have a token, and attaches the `.vsix` to a GitHub release. The tag has to match
+`version` in `package.json` or the workflow stops before doing any of it.
 
 ```
-npm version 0.1.0 --no-git-tag-version
-git commit -am "release: 0.1.0" && git tag v0.1.0 && git push --follow-tags
+npm version 0.2.2 --no-git-tag-version
+git commit -am "release: 0.2.2" && git tag v0.2.2 && git push --follow-tags
 ```
 
-That needs two repository secrets: `VSCE_PAT`, an Azure DevOps personal access token scoped to
-**Marketplace → Manage**, and `OVSX_PAT`, an Open VSX access token. To publish by hand instead:
+A marketplace whose token is missing is skipped rather than failing the run, so this works
+before any token exists -- the release and its `.vsix` still appear on GitHub.
+
+### The two tokens
+
+`VSCE_PAT` publishes to the Visual Studio Marketplace. Create it at **dev.azure.com** under
+*User settings → Personal access tokens*, signed in as the same account that owns the
+publisher. Two fields decide whether it works, and the default is wrong for both:
+
+- **Organization** must be *All accessible organizations*, not the single organization that is
+  preselected.
+- **Scopes** must be *Custom defined*, then **Marketplace → Manage**. The token cannot be
+  read back after the dialog closes.
+
+`OVSX_PAT` publishes to Open VSX, which is what VS Code forks read. Create it at
+**open-vsx.org** after signing in with GitHub and signing the Eclipse publisher agreement.
+
+Store them without letting either through a shell history or a chat window:
+
+```
+gh secret set VSCE_PAT --repo amophi/android-panel
+gh secret set OVSX_PAT --repo amophi/android-panel
+```
+
+Each command prompts for the value and reads it from the terminal. To publish by hand instead
+of tagging:
 
 ```
 npx @vscode/vsce publish --no-dependencies

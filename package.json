@@ -32,6 +32,10 @@
     "color": "#1f1f1f",
     "theme": "dark"
   },
+  "scripts": {
+    "test": "node test/smoke.js",
+    "package": "npx --yes @vscode/vsce package --no-dependencies --out android-panel.vsix"
+  },
   "main": "./extension.js",
   "l10n": "./l10n",
   "activationEvents": [],
