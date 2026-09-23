@@ -186,10 +186,31 @@ A phone screen is far larger than a sidebar. Encoding 1440x3120 and scaling it d
 wastes most of the work, so `maxSize` asks the server to scale before encoding. On a 1440x3120
 display `maxSize: 1080` yields 498x1080 — still sharper than the panel is wide:
 
-| | encoded | bandwidth | pixels per frame |
+| | encoded | bandwidth, idle screen | pixels per frame |
 | --- | --- | --- | --- |
 | unscaled | 1440x3120 | ~50 KB/s | 4.49 M |
 | `maxSize: 1080` | 498x1080 | ~13 KB/s | 0.54 M |
+
+Those bandwidth figures are for a screen that is not moving, which is most of the time: H.264
+sends almost nothing while nothing changes. A screen in motion costs about a hundred times as
+much, and then the frame rate is what decides the bill. Measured on the same phone at
+`maxSize: 1080`, scrolling a long list continuously for ten seconds:
+
+| `maxFps` | delivered | bandwidth | per frame |
+| --- | --- | --- | --- |
+| 12 | 12.0 fps | 304 KB/s | 25.4 KB |
+| 60 | 59.1 fps | 1260 KB/s | 21.3 KB |
+| 0 (default) | 118.1 fps | 1255 KB/s | 10.6 KB |
+
+Bandwidth flattens out because frames get cheaper as they get more frequent — less changes
+between two of them. So capping the rate buys decoding work back, not bandwidth: 60 costs the
+same to transfer as unlimited while halving what the webview has to decode, and on a panel this
+size 60 and 118 are hard to tell apart.
+
+Two things that look like they should matter and do not. `maxSize` does not limit the rate:
+dropping it from 1080 to 720 left the frame rate unchanged at 118 fps. Nor does the base64 the
+frames are encoded into on the way to the webview, which came to 1.8 ms per second of video at
+118 fps — under 0.2% of one core.
 
 Scaling separates two coordinate spaces: the video is 498x1080 but `input tap` still expects display
 coordinates. The panel asks the device with `wm size -d <id>` rather than reusing the video size.
