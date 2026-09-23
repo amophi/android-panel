@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.4
+
+Documentation only.
+
+- What the frame rate costs, measured rather than assumed. The bandwidth figures were taken
+  on an idle screen without saying so, which understates a scrolling one by about a hundred
+  times; there is now a frame-rate table beside them. Capping `maxFps` buys back decoding
+  work rather than bandwidth, because frames get cheaper as they get more frequent.
+- `maxSize` is not what limits the frame rate, and neither is the base64 the frames pass
+  through on the way to the webview. Both were measured and ruled out.
+
 ## 0.2.3
 
 - Startup cleanup no longer disturbs a scrcpy session running alongside the panel. It used

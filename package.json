@@ -3,7 +3,7 @@
   "displayName": "Android Panel",
   "description": "%extension.description%",
   "icon": "icon.png",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "publisher": "amophi",
   "license": "MIT",
   "homepage": "https://github.com/amophi/android-panel#readme",
