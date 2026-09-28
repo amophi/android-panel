@@ -2,8 +2,10 @@ const vscode = require('vscode');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const { execFile } = require('child_process');
-const { ScrcpyStream, codecStringFromConfig } = require('./scrcpy');
+const { execFile, spawn } = require('child_process');
+const {
+  ScrcpyStream, codecStringFromConfig, ACTION, touchMessage, scrollMessage, keyMessage, resetVideoMessage,
+} = require('./scrcpy');
 
 const VIEW_ID = 'androidPanel.screen';
 
@@ -11,6 +13,12 @@ const VIEW_ID = 'androidPanel.screen';
 // the app, so the panel streams fine while nothing responds to a click. Being locked is not
 // the problem -- being asleep is.
 const KEY_WAKEUP = 'KEYCODE_WAKEUP';
+
+// Screencap mode. A gesture after this long without input wakes the device first, since
+// nothing else notices that a screen timeout has put it to sleep.
+const IDLE_WAKE_MS = 30000;
+// Screencap mode. How long after input the next capture comes, instead of a full interval.
+const AFTER_INPUT_MS = 150;
 
 // Servers this panel has started, so a later run can clean up after a crash without touching
 // a scrcpy session the user is running alongside it.
@@ -25,6 +33,7 @@ function closeReason(code) {
     case 'server-exited': return t('The server on the device exited.');
     case 'stream-corrupt': return t('The stream is corrupt.');
     case 'stream-ended': return t('The stream was interrupted.');
+    case 'stream-disabled': return t('The device could not set up the video stream.');
     default: return code || t('The stream was interrupted.');
   }
 }
@@ -294,6 +303,205 @@ function esc(s) {
     .replace(/"/g, '&quot;');
 }
 
+/**
+ * What the device's `input` command can do. It grew over the years: `motionevent` came with
+ * Android 10, its CANCEL with 12, and pointer scrolling only with 14 QPR3 -- partway through an
+ * API level, so that one is looked up in the usage text rather than inferred from the version.
+ */
+async function inputCaps(bin, serial) {
+  try {
+    const out = await adb(bin, ['-s', serial, 'shell',
+      'getprop ro.build.version.sdk; input 2>&1 | grep -c -w scroll; true']);
+    const [sdk, scroll] = out.split(/\r?\n/).map((l) => parseInt(l, 10));
+    if (!Number.isFinite(sdk)) return null;
+    return { motionevent: sdk >= 29, cancel: sdk >= 31, scroll: scroll > 0 };
+  } catch (_) {
+    return null;
+  }
+}
+
+/** Tap and swipe, which every Android version has. */
+const LEGACY_INPUT = { motionevent: false, cancel: false, scroll: false };
+
+// Without pointer scrolling, a wheel notch becomes a drag of this share of the screen's long
+// side -- about the 64 dp a notch scrolls on a phone -- once the turns add up to a drag long
+// enough not to be taken for a tap.
+const WHEEL_DRAG = 0.07;
+const MIN_WHEEL_DRAG = 64;
+
+const TOUCH_EDGES = { down: 'DOWN', move: 'MOVE', up: 'UP', cancel: 'CANCEL' };
+
+/** Adds one wheel event to another that is still waiting to be sent. */
+function addScroll(a, b) {
+  return a ? Object.assign({}, b, { dx: a.dx + b.dx, dy: a.dy + b.dy }) : Object.assign({}, b);
+}
+
+/**
+ * The `input` command lines for one event from the webview, for when there is no scrcpy
+ * control socket (screencap mode). Positions are already display pixels there: a screencap is
+ * taken at full resolution, in the current rotation.
+ *
+ * Where the device has `motionevent`, a touch goes as one command per edge of the gesture
+ * rather than as a tap or a swipe replayed after the fact: the device then sees how long a press
+ * was held and where a drag paused, so a hold is a long press and a drag that stops does not
+ * fling. Older devices only have tap and swipe, so there the press is kept in `gesture` and
+ * replayed on release. An empty list means there is nothing to send for this event.
+ */
+function adbInputCommands(m, displayId, caps, gesture) {
+  const d = displayId === null || displayId === undefined ? '' : ` -d ${displayId}`;
+  const n = (v) => (Number.isFinite(v) ? Math.round(v) : null);
+  if (m.type === 'key') return Number.isInteger(m.code) ? [`input${d} keyevent ${m.code}`] : [];
+  const x = n(m.x), y = n(m.y);
+  if (x === null || y === null) return [];
+
+  if (m.type === 'touch') {
+    if (!Object.prototype.hasOwnProperty.call(TOUCH_EDGES, m.action)) return [];
+    // A gesture keeps the way it started, even if the device's abilities come in meanwhile.
+    if (m.action === 'down') gesture.press = { x, y, t: Date.now(), motion: caps.motionevent, moved: false };
+    const press = gesture.press;
+    if (!press) return [];
+    const last = m.action === 'up' || m.action === 'cancel';
+    if (last) gesture.press = null;
+    if (press.motion) {
+      // Before Android 12 there is no CANCEL, and lifting is the only way to end the touch.
+      const edge = m.action === 'cancel' && !caps.cancel ? 'UP' : TOUCH_EDGES[m.action];
+      return [`input${d} motionevent ${edge} ${x} ${y}`];
+    }
+    if (m.action === 'move') press.moved = true;
+    if (!last || m.action === 'cancel') return [];
+    if (!press.moved) return [`input${d} tap ${press.x} ${press.y}`];
+    const ms = Math.min(2000, Math.max(100, Date.now() - press.t));
+    return [`input${d} swipe ${press.x} ${press.y} ${x} ${y} ${ms}`];
+  }
+
+  if (m.type === 'scroll') {
+    if (!Number.isFinite(m.dx) || !Number.isFinite(m.dy)) return [];
+    if (caps.scroll) {
+      // The source comes before -d; `input` reads its arguments in that order.
+      return [`input mouse${d} scroll ${x} ${y} --axis VSCROLL,${m.dy.toFixed(3)} --axis HSCROLL,${m.dx.toFixed(3)}`];
+    }
+    if (!(m.w > 0 && m.h > 0)) return [];
+    const wheel = gesture.wheel || { dx: 0, dy: 0 };
+    wheel.dx += m.dx;
+    wheel.dy += m.dy;
+    gesture.wheel = wheel;
+    // Scrolling up moves the content down, which a finger does by dragging down.
+    const step = Math.max(m.w, m.h) * WHEEL_DRAG;
+    const mx = -wheel.dx * step, my = wheel.dy * step;
+    if (Math.hypot(mx, my) < MIN_WHEEL_DRAG) return [];
+    gesture.wheel = null;
+    const clamp = (v, size) => Math.min(size - 1, Math.max(0, Math.round(v)));
+    const x2 = clamp(x + mx, m.w), y2 = clamp(y + my, m.h);
+    if (caps.motionevent) {
+      // Holding still at the end before lifting leaves the drag no speed to fling with.
+      const me = (a, px, py) => `input${d} motionevent ${a} ${px} ${py}`;
+      return [[me('DOWN', x, y), me('MOVE', x2, y2), 'sleep 0.15', me('MOVE', x2, y2), me('UP', x2, y2)].join('; ')];
+    }
+    return [`input${d} swipe ${x} ${y} ${x2} ${y2} 400`];
+  }
+  return [];
+}
+
+const ACK = '__androidPanel_ack__';
+// A shell that has not finished a command in this long is taken to be stuck, and replaced.
+const STALL_MS = 5000;
+
+/**
+ * One long-lived `adb shell` that input commands are written into, a line each. Starting adb
+ * for every event costs a process and a handshake each time, and two events in flight can
+ * overtake each other; one shell keeps them cheap and in order.
+ *
+ * Every command echoes a marker when it finishes, so the shell knows how many are still
+ * running. Moves arrive faster than `input` can inject them, so while one is running only the
+ * newest waiting move is kept. Everything else is sent as it comes. `onIdle` runs whenever the
+ * last command has finished, for a caller holding work back until then.
+ */
+class InputShell {
+  constructor(bin, serial, onIdle, spawnFn) {
+    this.bin = bin;
+    this.serial = serial;
+    this.onIdle = onIdle || null;
+    this.spawn = spawnFn || spawn;
+    this.proc = null;
+    this.running = 0;
+    this.move = null;
+    this.tail = '';
+    this.lastProgress = 0;
+  }
+
+  get busy() {
+    return this.running > 0 || this.move !== null;
+  }
+
+  ensure() {
+    if (this.proc) return this.proc;
+    const proc = this.spawn(this.bin, ['-s', this.serial, 'shell'], { windowsHide: true });
+    proc.stdout.on('data', (d) => this.onOutput(String(d)));
+    // An `input` that fails complains on stderr. Left unread, that pipe fills, adb stops
+    // forwarding anything, and every later command waits behind it for good.
+    proc.stderr.on('data', () => {});
+    proc.stdin.on('error', () => {});
+    const gone = () => {
+      if (this.proc !== proc) return;
+      this.proc = null;
+      this.running = 0;
+      this.move = null;
+    };
+    proc.on('exit', gone);
+    proc.on('error', gone);
+    this.proc = proc;
+    this.tail = '';
+    return proc;
+  }
+
+  run(cmd) {
+    const now = Date.now();
+    if (this.running && now - this.lastProgress > STALL_MS) this.close();
+    if (!this.running) this.lastProgress = now;
+    this.running++;
+    this.ensure().stdin.write(`${cmd}; echo ${ACK}\n`);
+  }
+
+  /** A move that has to wait replaces whichever move was already waiting. */
+  runMove(cmd) {
+    if (this.running) this.move = cmd;
+    else this.run(cmd);
+  }
+
+  /** A lift carries its own position, so a move still waiting for it has nothing left to add. */
+  dropMove() {
+    this.move = null;
+  }
+
+  onOutput(text) {
+    const lines = (this.tail + text).split(/\r?\n/);
+    this.tail = lines.pop();
+    for (const line of lines) {
+      if (line.trim() !== ACK) continue;
+      this.running = Math.max(0, this.running - 1);
+      this.lastProgress = Date.now();
+    }
+    if (this.running) return;
+    if (this.move) {
+      const cmd = this.move;
+      this.move = null;
+      this.run(cmd);
+    } else if (this.onIdle) {
+      this.onIdle();
+    }
+  }
+
+  close() {
+    const proc = this.proc;
+    this.proc = null;
+    this.running = 0;
+    this.move = null;
+    if (!proc) return;
+    try { proc.stdin.end(); } catch (_) {}
+    try { proc.kill(); } catch (_) {}
+  }
+}
+
 class ScreenView {
   constructor(context) {
     this.context = context;
@@ -307,6 +515,22 @@ class ScreenView {
     this.configPacket = null;
     this.started = false;
     this.health = null;
+    this.shell = null; // InputShell, screencap mode only
+    this.hurry = false; // screencap mode: capture again soon after the one in progress
+    this.lastInput = 0;
+    this.lastKeyFrameRequest = 0;
+    // The mode of the current run, once it has a device; null while none is running. Input
+    // is routed by this rather than by whatever happens to exist yet, so a click in stream
+    // mode before the stream is up is dropped instead of leaking out through adb.
+    this.mode = null;
+    // Moved on by every stop(). A start() still awaiting something when that happens -- a
+    // reconnect in the middle of starting -- sees it and goes no further.
+    this.gen = 0;
+    // Screencap mode: what the device's `input` can do, the press of a gesture in progress,
+    // and wheel turns waiting for the shell.
+    this.inputCaps = null;
+    this.gesture = {};
+    this.pendingScroll = null;
   }
 
   resolveWebviewView(view) {
@@ -337,27 +561,37 @@ class ScreenView {
   async start() {
     if (this.started) return;
     this.started = true;
+    const gen = this.gen;
     await ensureResolved();
+    if (gen !== this.gen) return;
     const c = config();
     this.status(t('Looking for a device…'));
+    let serial;
     try {
-      this.serial = c.serial || (await pickSerial(c.adb, c.pkg));
+      serial = c.serial || (await pickSerial(c.adb, c.pkg));
     } catch (_) {
+      if (gen !== this.gen) return;
       this.started = false;
       return this.status(t('Could not run adb. Check the path in the settings.'), 'error');
     }
+    if (gen !== this.gen) return;
+    this.serial = serial;
     if (!this.serial) {
       this.started = false;
       return this.status(t('No device connected. Check the USB connection.'), 'error');
     }
+    this.mode = c.mode;
     this.post({ type: 'mode', mode: c.mode });
     await this.wake(true);
-    if (c.mode === 'stream') await this.startStream(c);
+    if (gen !== this.gen) return;
+    if (c.mode === 'stream') await this.startStream(c, gen);
     else this.startCapture();
   }
 
   stop() {
+    this.gen++;
     this.started = false;
+    this.mode = null;
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
@@ -373,6 +607,12 @@ class ScreenView {
         .catch(() => {});
       this.stream = null;
     }
+    if (this.shell) {
+      this.shell.close();
+      this.shell = null;
+    }
+    this.gesture = {};
+    this.pendingScroll = null;
     this.displayId = null;
     this.configPacket = null;
   }
@@ -386,7 +626,7 @@ class ScreenView {
 
   // ---------- stream mode: virtual display + H.264 ----------
 
-  async startStream(c) {
+  async startStream(c, gen) {
     if (!c.serverPath) {
       this.started = false;
       return this.status(t('The scrcpyServerPath setting is required.'), 'error');
@@ -394,15 +634,23 @@ class ScreenView {
     let version = c.version;
     if (!version) {
       version = await detectVersion(c.serverPath);
+      if (gen !== this.gen) return;
       if (!version) {
         this.started = false;
         return this.status(t('Could not determine the scrcpy version. Set scrcpyVersion manually.'), 'error');
       }
     }
+    // The stream and control formats spoken here are 4.x's. An older server frames the video
+    // differently, and the result would be garbage rather than an error.
+    if (parseInt(version, 10) < 4) {
+      this.started = false;
+      return this.status(t('scrcpy {0} is too old. The panel needs scrcpy 4.0 or later.', version), 'error');
+    }
     // "phone" mirrors the device's own screen; "app" gets a display of its own.
     let newDisplay = null;
     if (c.show === 'app') {
       newDisplay = c.newDisplay || (await deviceDisplaySpec(c.adb, this.serial));
+      if (gen !== this.gen) return;
       if (!newDisplay) {
         this.started = false;
         return this.status(t('Could not read the screen size. Set newDisplay instead.'), 'error');
@@ -419,21 +667,30 @@ class ScreenView {
       maxFps: c.maxFps,
       maxSize: c.maxSize,
       stayAwake: c.stayAwake,
+      // Not keep_active. It would stop screen timeouts altogether, but even a virtual display
+      // sits in the phone's own display group (measured on One UI 8: displayGroupId 0 despite
+      // FLAG_OWN_DISPLAY_GROUP), so the phone would stay unlocked for as long as the panel
+      // runs. The health check wakes the device after a timeout instead, locked.
     });
-    this.stream = s;
-    // Written down before the server starts: one that dies in between is still ours to clean.
-    await this.context.globalState.update(SCIDS_KEY, [...new Set([...known, s.scid])]);
+    // Events from a stream this run has since let go of are not ours to act on.
+    const live = () => this.stream === s;
 
     s.on('display', async (id) => {
+      if (!live()) return;
       this.displayId = id;
-      await this.sendDeviceSize();
       if (c.pkg) await this.launch();
     });
-    s.on('meta', (m) => {
-      this.status(`${this.serial} · ${m.width}x${m.height}`);
-      this.sendDeviceSize();
+    // A new video size: at the start, and whenever the display rotates. The webview sends
+    // input in pixels of the frames it shows, so it has to know which size is current.
+    s.on('session', (v) => {
+      if (!live()) return;
+      this.status(`${this.serial} · ${v.width}x${v.height}`);
+      this.post({ type: 'session', w: v.width, h: v.height });
     });
     s.on('packet', (p) => {
+      if (!live()) return;
+      // A key frame answers any request for one, so the next request is a new one.
+      if (p.type !== 'delta') this.lastKeyFrameRequest = 0;
       if (p.type === 'config') {
         this.configPacket = p.data;
         this.post({ type: 'config', codec: codecStringFromConfig(p.data) });
@@ -446,43 +703,42 @@ class ScreenView {
           : p.data;
       this.post({ type: 'chunk', key: p.type === 'key', data: body.toString('base64') });
     });
-    s.on('log', (text) => this.status(text.split('\n')[0].slice(0, 120), 'error'));
-    s.on('closed', (why) => {
-      if (!this.started) return;
-      this.status(closeReason(why), 'error');
-      this.started = false;
+    // A logged error is worth showing, but it is not the end of the stream, so it must not
+    // blank the picture the way a real failure does. 'closed' covers those.
+    s.on('log', (text) => {
+      if (live()) this.status(text.split('\n')[0].slice(0, 120), 'warn');
     });
+    s.on('closed', (why) => {
+      if (!this.started || !live()) return;
+      this.status(closeReason(why), 'error');
+      // Everything that belonged to this run goes with it: the health check would otherwise
+      // keep polling, and a second one would join it on the next start.
+      this.stop();
+    });
+
+    // From here on stop() knows about the stream and stops it along with everything else.
+    this.stream = s;
+    // Written down before the server starts: one that dies in between is still ours to clean.
+    await this.context.globalState.update(SCIDS_KEY, [...new Set([...known, s.scid])]);
+    if (!live()) return;
 
     try {
       await s.start();
+      // A stop() or a reconnect during start() has already let this stream go. Carrying on
+      // would leave a health check polling a stream that is gone.
+      if (!live()) return s.stop().catch(() => {});
       // cleanupOrphans() has dealt with every earlier scid by now, so ours is the only one
       // left to remember. Without this the list would grow with every crash.
       await this.context.globalState.update(SCIDS_KEY, [s.scid]);
+      if (!live()) return;
       this.status(t('{0} · connecting…', this.serial));
       this.warnIfLocked();
       // The display can vanish and the app can be pushed aside, so check in periodically.
       this.health = setInterval(() => this.healthCheck(), 8000);
     } catch (e) {
-      this.started = false;
+      if (!live()) return;
       this.status(t('Could not start the stream: {0}', e.message), 'error');
-    }
-  }
-
-  /**
-   * Touch coordinates follow the display resolution, not the size of the video.
-   * max_size makes the two differ, so the device is asked directly.
-   */
-  async sendDeviceSize() {
-    const c = config();
-    const args = ['-s', this.serial, 'shell', 'wm', 'size'];
-    if (this.displayId !== null) args.push('-d', String(this.displayId));
-    try {
-      const out = await adb(c.adb, args);
-      const lines = out.split(/\r?\n/).filter(Boolean);
-      const m = /(\d+)x(\d+)/.exec(lines[lines.length - 1] || '');
-      if (m) this.post({ type: 'size', w: Number(m[1]), h: Number(m[2]) });
-    } catch (_) {
-      /* next time round */
+      this.stop();
     }
   }
 
@@ -515,12 +771,16 @@ class ScreenView {
    */
   async healthCheck() {
     if (!this.started || !this.stream) return;
+    // A check that outlives its run would report the next run's display as missing.
+    const gen = this.gen;
+    const gone = () => gen !== this.gen;
     await this.wake(false);
-    if (await this.warnIfLocked()) return;
-    if (this.displayId === null) return;
+    if (gone() || (await this.warnIfLocked())) return;
+    if (gone() || this.displayId === null) return;
     const c = config();
     try {
       const disp = await adb(c.adb, ['-s', this.serial, 'shell', 'dumpsys', 'display']);
+      if (gone()) return;
       if (disp.indexOf('displayId=' + this.displayId + ',') < 0) {
         this.status(t('The display disappeared; reconnecting.'), 'error');
         this.stop();
@@ -529,6 +789,7 @@ class ScreenView {
       }
       if (!c.pkg) return;
       const acts = await adb(c.adb, ['-s', this.serial, 'shell', 'dumpsys', 'activity', 'activities']);
+      if (gone()) return;
       const at = acts.indexOf('Display #' + this.displayId + ' ');
       if (at >= 0 && acts.slice(at, at + 800).indexOf(packageOf(c.pkg)) < 0) await this.launch();
     } catch (_) {
@@ -541,17 +802,35 @@ class ScreenView {
   startCapture() {
     this.lastHash = '';
     this.status(this.serial);
-    if (config().pkg) this.launch().catch(() => {});
+    const c = config();
+    // Until the answer is in, input is sent the way every Android version understands.
+    this.inputCaps = null;
+    const gen = this.gen;
+    inputCaps(c.adb, this.serial).then((caps) => {
+      if (gen === this.gen) this.inputCaps = caps;
+    });
+    if (c.pkg) this.launch().catch(() => {});
     this.tick();
   }
 
-  schedule() {
+  schedule(delay) {
     if (this.timer) clearTimeout(this.timer);
-    this.timer = setTimeout(() => this.tick(), config().interval);
+    this.timer = setTimeout(() => this.tick(), delay === undefined ? config().interval : delay);
+  }
+
+  /**
+   * Input usually changes the screen, and waiting out the full interval to show it reads as
+   * lag. The short delay gives the app a moment to draw its response first.
+   */
+  captureSoon() {
+    if (this.mode !== 'screencap') return;
+    this.lastHash = '';
+    if (this.busy) this.hurry = true;
+    else if (this.started) this.schedule(AFTER_INPUT_MS);
   }
 
   async tick() {
-    if (!this.started) return;
+    if (!this.started || this.mode !== 'screencap') return;
     if (this.busy) return this.schedule();
     this.busy = true;
     try {
@@ -570,23 +849,96 @@ class ScreenView {
       this.status(t('Could not read the screen. Check the device connection.'), 'error');
     } finally {
       this.busy = false;
-      this.schedule();
+      const hurry = this.hurry;
+      this.hurry = false;
+      this.schedule(hurry ? AFTER_INPUT_MS : undefined);
     }
   }
 
   // ---------- input ----------
 
-  async send(args) {
-    if (!this.serial) return;
-    const c = config();
-    // While a virtual display is in use, input has to be aimed at it.
-    const target = this.displayId === null ? args : ['-d', String(this.displayId), ...args];
-    try {
-      await adb(c.adb, ['-s', this.serial, 'shell', 'input', ...target]);
-      this.lastHash = '';
-    } catch (_) {
-      /* the next frame recovers */
+  /** One input event from the webview: a touch, a wheel turn or a key. */
+  input(m) {
+    if (!this.started || !this.mode) return;
+    const now = Date.now();
+    const idle = now - this.lastInput;
+    this.lastInput = now;
+    if (this.mode === 'stream') {
+      if (this.stream) this.inputViaControl(m);
+      return;
     }
+    this.inputViaAdb(m, idle);
+  }
+
+  /**
+   * Stream mode. The scrcpy server injects the event itself, so there is no process per
+   * event, and it maps the position onto the display through its own scaling and rotation.
+   * Until the control socket is up there is nothing to send on, and the event is dropped.
+   */
+  inputViaControl(m) {
+    const s = this.stream;
+    try {
+      if (m.type === 'touch' && Object.prototype.hasOwnProperty.call(ACTION, m.action)) {
+        s.control(touchMessage(ACTION[m.action], m));
+      } else if (m.type === 'scroll') {
+        s.control(scrollMessage(m, m.dx, m.dy));
+      } else if (m.type === 'key' && Number.isInteger(m.code)) {
+        s.control(keyMessage(ACTION.down, m.code));
+        s.control(keyMessage(ACTION.up, m.code));
+      }
+    } catch (_) {
+      /* a malformed position; the next event is independent of it */
+    }
+  }
+
+  /** Screencap mode, which has no scrcpy server and so no control socket. */
+  inputViaAdb(m, idle) {
+    const c = config();
+    if (!this.shell) this.shell = new InputShell(c.adb, this.serial, () => this.flushScroll());
+    const sh = this.shell;
+    // A wheel turns faster than `input` can keep up with. While the shell is busy the turns
+    // are added up and go as one scroll once it is free, instead of queueing one by one and
+    // holding up whatever comes after them.
+    if (m.type === 'scroll') {
+      if (sh.busy) {
+        this.pendingScroll = addScroll(this.pendingScroll, m);
+        return;
+      }
+    } else {
+      this.flushScroll(); // a scroll made before this event still goes first
+    }
+    const cmds = adbInputCommands(m, this.displayId, this.inputCaps || LEGACY_INPUT, this.gesture);
+    if (!cmds.length) return;
+    if (m.type === 'touch' && m.action === 'move') return sh.runMove(cmds[0]);
+    if (m.type === 'touch') sh.dropMove();
+    // Nothing checks on the device between captures, so a gesture that starts after a long
+    // quiet spell wakes it first. On an awake device the key does nothing.
+    if (c.wakeDevice && (m.type !== 'touch' || m.action === 'down') && idle > IDLE_WAKE_MS) {
+      sh.run(`input keyevent ${KEY_WAKEUP}`);
+    }
+    for (const cmd of cmds) sh.run(cmd);
+    if (m.type !== 'touch' || m.action === 'up' || m.action === 'cancel') this.captureSoon();
+  }
+
+  flushScroll() {
+    const m = this.pendingScroll;
+    if (!m || !this.shell) return;
+    this.pendingScroll = null;
+    const cmds = adbInputCommands(m, this.displayId, this.inputCaps || LEGACY_INPUT, this.gesture);
+    for (const cmd of cmds) this.shell.run(cmd);
+    if (cmds.length) this.captureSoon();
+  }
+
+  /**
+   * Asks the server for a key frame, when the webview's decoder has lost its place. The
+   * webview already asks at most once a second; this only guards against a runaway page,
+   * and is kept well short of that so the two limits cannot add up.
+   */
+  requestKeyFrame() {
+    const now = Date.now();
+    if (!this.stream || now - this.lastKeyFrameRequest < 250) return;
+    this.lastKeyFrameRequest = now;
+    this.stream.control(resetVideoMessage());
   }
 
   async launch() {
@@ -653,25 +1005,20 @@ class ScreenView {
       // It started, but behind the keyguard nothing of it can be seen.
       await this.warnIfLocked();
     } catch (_) {
-      this.status(t('Could not start {0}', component), 'error');
+      // The stream is still up and showing what it showed, so this must not blank it.
+      this.status(t('Could not start {0}', component), 'warn');
     }
   }
 
   onMessage(m) {
     switch (m.type) {
-      case 'tap':
-        this.send(['tap', String(Math.round(m.x)), String(Math.round(m.y))]);
-        break;
-      case 'swipe':
-        this.send([
-          'swipe',
-          String(Math.round(m.x1)), String(Math.round(m.y1)),
-          String(Math.round(m.x2)), String(Math.round(m.y2)),
-          String(m.ms || 150),
-        ]);
-        break;
+      case 'touch':
+      case 'scroll':
       case 'key':
-        this.send(['keyevent', String(m.code)]);
+        this.input(m);
+        break;
+      case 'need-key':
+        this.requestKeyFrame();
         break;
       case 'launch':
         this.launch();
@@ -747,7 +1094,10 @@ class ScreenView {
   #status.warn { color: var(--vscode-editorWarning-foreground, var(--vscode-foreground)); opacity: 1; }
   #wrap { flex: 1 1 auto; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; }
   #wrap.wide { align-items: flex-start; overflow-y: auto; }
-  #screen, #shot { max-width: 100%; max-height: 100%; object-fit: contain; cursor: pointer; display: none; }
+  #screen, #shot {
+    max-width: 100%; max-height: 100%; object-fit: contain; cursor: pointer; display: none;
+    touch-action: none; user-select: none; -webkit-user-drag: none;
+  }
   #wrap.wide #screen, #wrap.wide #shot { width: 100%; height: auto; max-height: none; }
   #empty { opacity: .6; padding: 16px; text-align: center; line-height: 1.6; }
   #picker {
@@ -800,17 +1150,35 @@ class ScreenView {
   const empty = document.getElementById('empty');
   const status = document.getElementById('status');
   const ctx = canvas.getContext('2d');
-  let dev = { w: 0, h: 0 };
-  let decoder = null, ts = 0, waitingKey = true, target = canvas;
+  // The size of the picture on show, in its own pixels. Input goes out in these pixels with
+  // the size attached, and the server maps it onto the display itself -- scaling and rotation
+  // included. It ignores a size that is no longer current, which keeps a rotation from
+  // sending taps to the wrong place.
+  let picture = { w: 0, h: 0 };
+  let target = canvas, visible = null;
+  let decoder = null, codec = null, ts = 0, waitingKey = true, lastRecovery = 0;
+  let lastKeyAsk = 0, keyAnswered = true, failed = false;
+  let pending = null, drawQueued = false;
+  // Frames the decoder may hold before it counts as falling behind.
+  const MAX_QUEUE = 10;
 
   function show(el) {
     target = el;
+    if (visible === el) return; // runs for every frame; touch the DOM only on a change
+    visible = el;
     canvas.style.display = el === canvas ? 'block' : 'none';
     shot.style.display = el === shot ? 'block' : 'none';
     empty.style.display = 'none';
   }
 
+  // A failure ends the picture. The frame waiting to be drawn and the decoder go with it, or a
+  // late frame would put the canvas back over the message; the next config starts afresh.
   function fail(msg) {
+    failed = true;
+    if (pending) { pending.close(); pending = null; }
+    try { if (decoder && decoder.state !== 'closed') decoder.close(); } catch (e) {}
+    decoder = null;
+    visible = null;
     status.textContent = msg; status.className = 'error';
     canvas.style.display = 'none'; shot.style.display = 'none';
     empty.style.display = 'block'; empty.textContent = msg;
@@ -822,26 +1190,72 @@ class ScreenView {
     return out;
   }
 
-  function setupDecoder(codec) {
+  // Frames are drawn once per display refresh, newest only. Drawing each as it arrives falls
+  // behind whenever the device outpaces the panel, and a frame replaced before it was drawn
+  // is closed at once, so the decoder is never kept waiting for frames parked here.
+  function present(frame) {
+    if (pending) pending.close();
+    pending = frame;
+    if (!drawQueued) { drawQueued = true; requestAnimationFrame(draw); }
+  }
+
+  function draw() {
+    drawQueued = false;
+    const frame = pending;
+    pending = null;
+    if (!frame) return;
+    const w = frame.displayWidth, h = frame.displayHeight;
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+    }
+    ctx.drawImage(frame, 0, 0);
+    frame.close();
+    picture = { w: w, h: h };
+    show(canvas);
+  }
+
+  // Every frame depends on the one before it, so decoding can only resume from a key frame.
+  // The server sends one on request rather than making the panel wait for the next one. Each
+  // request restarts the encoder on the device, so one a second is the most that is asked --
+  // except that a decoder failing after its key frame came has a new problem, not the old one.
+  function needKey(urgent) {
+    waitingKey = true;
+    const now = Date.now();
+    if (!(urgent && keyAnswered) && now - lastKeyAsk < 1000) return;
+    lastKeyAsk = now;
+    keyAnswered = false;
+    vs.postMessage({ type: 'need-key' });
+  }
+
+  function setupDecoder(c) {
     if (typeof VideoDecoder === 'undefined') {
       fail(S.noWebCodecs);
       return;
     }
-    try { if (decoder) decoder.close(); } catch (e) {}
+    codec = c;
+    failed = false;
+    try { if (decoder && decoder.state !== 'closed') decoder.close(); } catch (e) {}
     waitingKey = true;
-    decoder = new VideoDecoder({
-      output: (frame) => {
-        if (canvas.width !== frame.displayWidth) {
-          canvas.width = frame.displayWidth;
-          canvas.height = frame.displayHeight;
-        }
-        ctx.drawImage(frame, 0, 0);
-        frame.close();
-        show(canvas);
+    const d = new VideoDecoder({
+      // A decoder that has been replaced may still hand over a frame it was working on.
+      output: (frame) => (decoder === d ? present(frame) : frame.close()),
+      // An error closes the decoder for good, and no new one would come before the next
+      // rotation. So a fresh one takes over and asks for a key frame -- unless that already
+      // happened a moment ago, which means the stream itself is the problem.
+      error: (e) => {
+        if (decoder !== d) return;
+        const msg = S.decodeError.replace('{0}', e.message);
+        const now = Date.now();
+        if (now - lastRecovery < 2000) return fail(msg);
+        lastRecovery = now;
+        status.textContent = msg; status.className = 'error';
+        setupDecoder(codec);
+        needKey(true);
       },
-      error: (e) => fail(S.decodeError.replace('{0}', e.message)),
     });
-    decoder.configure({ codec: codec, optimizeForLatency: true });
+    d.configure({ codec: c, optimizeForLatency: true });
+    decoder = d;
   }
 
   window.addEventListener('message', (e) => {
@@ -849,8 +1263,18 @@ class ScreenView {
     if (m.type === 'config') {
       setupDecoder(m.codec);
     } else if (m.type === 'chunk') {
-      if (!decoder || decoder.state !== 'configured') return;
-      if (waitingKey && !m.key) return;   // decoding has to start on a key frame
+      // Chunks with no decoder to take them: the page was reloaded under a running stream,
+      // and the config it needs went past before. A reset sends a new one straight away.
+      if (!decoder) {
+        if (!failed && typeof VideoDecoder !== 'undefined') needKey();
+        return;
+      }
+      if (decoder.state !== 'configured') return;
+      if (m.key) keyAnswered = true;
+      if (waitingKey && !m.key) return needKey(); // decoding has to start on a key frame
+      // A decoder that cannot keep up only falls further behind, since no frame can be
+      // skipped. Starting again from a fresh key frame catches up at once.
+      if (!m.key && decoder.decodeQueueSize > MAX_QUEUE) return needKey();
       waitingKey = false;
       try {
         decoder.decode(new EncodedVideoChunk({
@@ -858,13 +1282,39 @@ class ScreenView {
           timestamp: (ts += 16000),
           data: b64(m.data),
         }));
-      } catch (err) { waitingKey = true; }
+      } catch (err) { needKey(); }
+    } else if (m.type === 'session') {
+      // The display rotated. A finger still down would be lifted with the old size, which
+      // the server now ignores, and stay pressed on the device; it is cancelled with the new
+      // size instead. A cancel is not a click, so nothing gets pressed by accident.
+      //
+      // The server switches sizes a little before it says so, and a lift sent in between is
+      // dropped the same way. So a lift from just before is followed by a cancel as well; for
+      // a finger that did come up, the cancel changes nothing.
+      const recent = !finger && lastTouch && lastTouch.action !== 'down' && lastTouch.action !== 'move'
+        && Date.now() - lastTouch.t < 500 ? lastTouch : null;
+      const p = finger ? finger.last : recent;
+      if (p && (p.w !== m.w || p.h !== m.h)) {
+        finger = null;
+        pendingMove = null;
+        touch('cancel', {
+          x: Math.min(m.w - 1, Math.round(p.x * m.w / p.w)),
+          y: Math.min(m.h - 1, Math.round(p.y * m.h / p.h)),
+          w: m.w, h: m.h,
+        });
+      }
+    } else if (m.type === 'mode') {
+      // A new run. The picture still on show belongs to the last one, and input measured
+      // against it means nothing now, so none is sent until a frame of this run arrives.
+      picture = { w: 0, h: 0 };
+      finger = null;
+      pendingMove = null;
+      wheel = null;
+      lastTouch = null;
     } else if (m.type === 'frame') {
-      dev = { w: m.w, h: m.h };
+      picture = { w: m.w, h: m.h };
       shot.src = 'data:image/png;base64,' + m.data;
       show(shot);
-    } else if (m.type === 'size') {
-      dev = { w: m.w, h: m.h };
     } else if (m.type === 'apps') {
       apps = m.list || [];
       renderApps();
@@ -877,45 +1327,111 @@ class ScreenView {
     }
   });
 
-  // Maps a position on screen back to device coordinates.
-  function toDevice(ev) {
+  /**
+   * Maps a pointer position to picture pixels. object-fit can leave bars inside the element,
+   * so the picture's own rectangle is measured. A press has to land on the picture; a drag
+   * that runs off it is held at the edge, the way a finger would stop there.
+   */
+  function toPicture(e, strict) {
+    if (!picture.w) return null;
     const r = target.getBoundingClientRect();
-    if (!r.width || !dev.w) return null;
-    const x = (ev.clientX - r.left) / r.width * dev.w;
-    const y = (ev.clientY - r.top) / r.height * dev.h;
-    if (x < 0 || y < 0 || x > dev.w || y > dev.h) return null;
-    return { x: x, y: y };
+    if (!r.width || !r.height) return null;
+    const s = Math.min(r.width / picture.w, r.height / picture.h);
+    const x = (e.clientX - (r.left + (r.width - picture.w * s) / 2)) / s;
+    const y = (e.clientY - (r.top + (r.height - picture.h * s) / 2)) / s;
+    if (strict && (x < 0 || y < 0 || x >= picture.w || y >= picture.h)) return null;
+    const clamp = (v, n) => Math.min(n - 1, Math.max(0, Math.round(v)));
+    return { x: clamp(x, picture.w), y: clamp(y, picture.h), w: picture.w, h: picture.h };
   }
 
-  let down = null;
-  function onDown(e) { down = { p: toDevice(e), t: Date.now() }; }
-  function onUp(e) {
-    const up = toDevice(e);
-    if (!down || !down.p || !up) { down = null; return; }
-    const dx = up.x - down.p.x, dy = up.y - down.p.y;
-    if (Math.hypot(dx, dy) < 12) {
-      vs.postMessage({ type: 'tap', x: up.x, y: up.y });
-    } else {
-      vs.postMessage({ type: 'swipe', x1: down.p.x, y1: down.p.y, x2: up.x, y2: up.y,
-                       ms: Math.min(600, Math.max(80, Date.now() - down.t)) });
-    }
-    down = null;
+  let lastTouch = null;
+  function touch(action, p) {
+    lastTouch = { action: action, x: p.x, y: p.y, w: p.w, h: p.h, t: Date.now() };
+    vs.postMessage({ type: 'touch', action: action, x: p.x, y: p.y, w: p.w, h: p.h });
   }
-  let wheelLock = 0;
+
+  // One finger, worked by the primary button and passed on as it happens: down on press,
+  // moves while dragging, up on release. The device sees the real timing, so holding is a
+  // long press and a drag that stops before release does not fling. Pointer capture keeps the
+  // gesture going when the pointer leaves the picture.
+  //
+  // Wobble under SLOP CSS pixels keeps a click a click. In landscape one CSS pixel is about
+  // ten device pixels, so measuring on the device side would turn a shaky click into a drag.
+  const SLOP = 4;
+  let finger = null, pendingMove = null, moveQueued = false;
+
+  function press(e) {
+    if (e.button !== 0 || finger) return;
+    const p = toPicture(e, true);
+    if (!p) return;
+    e.preventDefault();
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch (err) {}
+    finger = { id: e.pointerId, x0: e.clientX, y0: e.clientY, moved: false, last: p };
+    touch('down', p);
+  }
+
+  function drag(e) {
+    if (!finger || e.pointerId !== finger.id) return;
+    if (!finger.moved && Math.hypot(e.clientX - finger.x0, e.clientY - finger.y0) < SLOP) return;
+    finger.moved = true;
+    pendingMove = toPicture(e, false);
+    if (pendingMove && !moveQueued) { moveQueued = true; requestAnimationFrame(flushMove); }
+  }
+
+  // At most one move per display frame; more would only queue up behind each other.
+  function flushMove() {
+    moveQueued = false;
+    if (!finger || !pendingMove) return;
+    finger.last = pendingMove;
+    touch('move', pendingMove);
+    pendingMove = null;
+  }
+
+  function lift(e) {
+    if (!finger || e.pointerId !== finger.id) return;
+    flushMove();
+    // A click lifts where it landed; a drag lifts where the pointer is now.
+    const p = (finger.moved && toPicture(e, false)) || finger.last;
+    finger = null;
+    // Losing the pointer without a release -- the view hid, say -- must not count as a click.
+    touch(e.type === 'pointerup' ? 'up' : 'cancel', p);
+  }
+
+  // A wheel notch is a scroll of 1.0 on Android: a list moves by the phone's own step and
+  // does not fling. Chromium reports a notch as 100 pixels, and touchpads send fractions of
+  // one. What arrives within one display frame is added up and sent at once.
+  let wheel = null;
   function onWheel(e) {
     e.preventDefault();
-    const now = Date.now();
-    if (now < wheelLock || !dev.h) return;
-    wheelLock = now + 260;
-    const cx = dev.w / 2, cy = dev.h / 2;
-    const amount = dev.h * 0.28 * (e.deltaY > 0 ? -1 : 1);
-    vs.postMessage({ type: 'swipe', x1: cx, y1: cy, x2: cx, y2: cy + amount, ms: 160 });
+    const p = toPicture(e, false);
+    if (!p) return;
+    const unit = e.deltaMode === 1 ? 3 : e.deltaMode === 2 ? 1 : 100;
+    if (!wheel) {
+      wheel = { dx: 0, dy: 0 };
+      requestAnimationFrame(flushWheel);
+    }
+    wheel.p = p;
+    wheel.dx += e.deltaX / unit;
+    wheel.dy -= e.deltaY / unit; // down is positive in the browser and negative on Android
   }
+
+  function flushWheel() {
+    const w = wheel;
+    wheel = null;
+    if (!w || (!w.dx && !w.dy)) return;
+    vs.postMessage({ type: 'scroll', x: w.p.x, y: w.p.y, w: w.p.w, h: w.p.h, dx: w.dx, dy: w.dy });
+  }
+
   [canvas, shot].forEach((el) => {
-    el.addEventListener('mousedown', onDown);
-    el.addEventListener('mouseup', onUp);
+    el.addEventListener('pointerdown', press);
+    el.addEventListener('pointermove', drag);
+    el.addEventListener('pointerup', lift);
+    el.addEventListener('pointercancel', lift);
+    el.addEventListener('lostpointercapture', lift);
     el.addEventListener('wheel', onWheel, { passive: false });
   });
+  // An image is draggable by default, and a native drag swallows the rest of the gesture.
+  shot.draggable = false;
 
   document.getElementById('back').onclick = () => vs.postMessage({ type: 'key', code: 4 });
   document.getElementById('home').onclick = () => vs.postMessage({ type: 'key', code: 3 });
@@ -996,4 +1512,4 @@ function activate(context) {
 
 function deactivate() {}
 
-module.exports = { activate, deactivate };
+module.exports = { activate, deactivate, _test: { adbInputCommands, addScroll, InputShell, LEGACY_INPUT } };

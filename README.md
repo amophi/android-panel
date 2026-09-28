@@ -4,8 +4,8 @@ Mirrors a connected Android device into a VS Code sidebar panel and lets you dri
 
 The panel speaks the scrcpy server protocol directly: it pushes `scrcpy-server` to the device, opens
 an `adb reverse` tunnel, and decodes the H.264 stream in the webview with WebCodecs. Clicks, drags and
-wheel scrolls go back as `input tap` / `input swipe`, so the panel is interactive rather than a
-read-only preview. No native modules, no bundler, no npm dependencies.
+wheel scrolls go back over scrcpy's control socket as touch and scroll events, so the panel is
+interactive rather than a read-only preview. No native modules, no bundler, no npm dependencies.
 
 Because it talks to the scrcpy server rather than shelling out to `screencap`, it can mirror a
 **virtual display** — the app runs on a display of its own and the device's real screen stays free
@@ -145,14 +145,25 @@ will not lock itself again while the panel is open.
 
 | Action | Effect |
 | --- | --- |
-| Click | `input tap` |
-| Drag | `input swipe` |
-| Wheel | Vertical swipe |
+| Click | A finger pressed and lifted, for as long as the button is held |
+| Drag | A finger dragged, live, along the path the mouse takes |
+| Wheel | A mouse wheel scroll at the pointer, one notch at a time |
 | ← / ⌂ | Back / Home key events |
 | ▶ | Launch the configured package |
 | ↻ | Re-detect the device |
 | ⊞ | List the device's apps and start one here |
 | ⤢ | Toggle between fitting the whole screen and filling the panel width |
+
+Every edge of a gesture reaches the device as it happens: down on press, moves while dragging, up
+on release. So holding the button is a long press, a game sees a button held for as long as it is
+held, and a drag that stops before release stays where it stopped instead of flinging on. A wheel
+notch is Android's own scroll unit, the step a mouse plugged into the phone would take.
+
+The picture can rotate under the pointer: a game that asks for landscape turns the virtual display
+with it. Positions are sent in pixels of the frame on show, with that frame's size, and the server
+maps them onto the display through its own scaling and rotation. It drops an event measured against
+a size that is no longer current, so a click in flight during a rotation is lost rather than
+misplaced, and a finger held down across one is cancelled rather than released as a click.
 
 ## Stream protocol
 
@@ -161,24 +172,59 @@ Measured against scrcpy 4.1. The server is started as:
 ```
 CLASSPATH=/data/local/tmp/scrcpy-server.jar app_process / \
   com.genymobile.scrcpy.Server 4.1 scid=<8 hex digits> log_level=info \
-  audio=false control=false new_display=<WxH/dpi>
+  audio=false clipboard_autosync=false power_on=false new_display=<WxH/dpi>
 ```
 
 `scid` is parsed with `Integer.parseInt(s, 16)`, so it must fit in a signed 32-bit int — the high
-bit has to be clear. The server then connects back through the reverse tunnel and writes:
+bit has to be clear. The server then connects back through the reverse tunnel twice, video first
+and control second, and writes on the first:
 
 ```
 device name   64 bytes, NUL-padded
-codec meta    16 bytes: codec id (4) + unknown (4) + width (4) + height (4)
-frames        repeated: PTS/flags (8) + length (4) + Annex-B payload
+codec id      4 bytes, "h264"
+then 12-byte headers, repeated; the top bit of the first byte tells the two kinds apart:
+  session     flags (4, top bit set) + width (4) + height (4), no payload
+  media       PTS/flags (8) + length (4) + Annex-B payload
 ```
 
-In the PTS word, bit 62 marks a config packet (SPS/PPS) and bit 61 marks a key frame. The config
-packet is prepended to the following key frame before handing it to `VideoDecoder`, which is
-configured from the profile and level found in the SPS.
+A session header comes before the first frame and again whenever the capture restarts, which is
+what a rotation does. It carries no payload, and its last word is the new height: a client that
+takes it for a media header reads the height as a payload length and never finds its place in the
+stream again. Earlier versions of the panel did exactly that: the first game to ask for landscape
+rotated the virtual display, and the stream came apart as "corrupt", taking the display and the
+game with it.
 
-Input does not use the scrcpy control socket. `control=false` is passed and taps are sent with
-`adb shell input -d <displayId> tap`, which keeps the client to one socket.
+In a media header's PTS word, bit 62 marks a config packet (SPS/PPS) and bit 61 marks a key frame.
+The config packet is prepended to the following key frame before handing it to `VideoDecoder`,
+which is configured from the profile and level found in the SPS, and set up again for every new
+session.
+
+Input goes over the control socket, in the messages scrcpy's own client writes: touch, scroll and
+key events, and `RESET_VIDEO` when the webview's decoder needs a key frame to start again from.
+The server injects them itself, so an event costs a socket write rather than an `adb shell input`
+process, and a touch is a finger on a touchscreen, which is the only kind of input many games read.
+`clipboard_autosync=false` keeps the server from sending the phone's clipboard back on the same
+socket; nothing here would read it, and like audio it has no business leaving the device.
+`power_on=false` stops the server pressing POWER on a dark screen: waking is left to
+`androidPanel.wakeDevice`, and done with a key that cannot turn the screen off instead.
+Touch and scroll are held back until the first session header, since before it the server has no
+mapping for positions and would inject them as raw display pixels.
+
+Measured on a Galaxy S25+, a touch sent over the control socket reached Android's input dispatcher
+in a median 2 ms. The same touch as `adb shell input tap` took 70 ms, most of it starting processes,
+and it only went out once the mouse button was released.
+
+`screencap` mode has no server and so no control socket. It writes `input` commands into one
+long-lived `adb shell` instead, with at most one move in flight and wheel turns added up while the
+shell is busy. What those commands can be depends on the Android version, which the panel asks
+once:
+
+| Android | Touch | Wheel |
+| --- | --- | --- |
+| 14 QPR3 and later | live `motionevent`, as in `stream` mode | `input mouse scroll` |
+| 12 to 14 | live `motionevent` | a short drag that holds still before lifting |
+| 10 and 11 | live `motionevent`, with no CANCEL | the same drag |
+| 9 and earlier | `tap`, or a `swipe` replayed on release | a slow `swipe` |
 
 ## Keeping it cheap
 
@@ -212,8 +258,11 @@ dropping it from 1080 to 720 left the frame rate unchanged at 118 fps. Nor does 
 frames are encoded into on the way to the webview, which came to 1.8 ms per second of video at
 118 fps — under 0.2% of one core.
 
-Scaling separates two coordinate spaces: the video is 498x1080 but `input tap` still expects display
-coordinates. The panel asks the device with `wm size -d <id>` rather than reusing the video size.
+Scaling separates two coordinate spaces: the video is 498x1080 while the display is 1440x3120, and
+a rotation swaps both. The panel does not translate between them. It sends positions in video
+pixels with the video size attached, and the server, which knows the current scaling and rotation,
+does the mapping. An earlier version asked `wm size`, which reports the display's natural
+orientation whatever the rotation, so every tap in landscape went to the wrong place.
 
 ## Cleaning up after itself
 
@@ -245,6 +294,12 @@ not share the physical screen's power state. The keyguard is not involved: awake
 delivers input fine. The panel therefore wakes the device when it starts, and again whenever the
 health check finds it asleep. `androidPanel.wakeDevice` turns that off, at the cost of a panel
 that cannot be clicked once the screen times out.
+
+scrcpy's `keep_active` would stop the timeout from firing at all, and is deliberately not used.
+A virtual display created with `FLAG_OWN_DISPLAY_GROUP` still sits in the phone's own display
+group -- measured on One UI 8, where `dumpsys display` shows `displayGroupId 0` for it and
+`dumpsys power` knows a single power group -- so reporting activity there would keep the phone
+itself from ever locking while the panel runs. Waking it after a timeout leaves it locked.
 
 In `screencap` mode frames are hashed and only pushed when the screen actually changed, so a static
 screen costs one `screencap` per interval and nothing else. That mode can only read **physical**
