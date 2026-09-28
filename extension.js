@@ -667,10 +667,11 @@ class ScreenView {
       maxFps: c.maxFps,
       maxSize: c.maxSize,
       stayAwake: c.stayAwake,
-      // Not keep_active. It would stop screen timeouts altogether, but even a virtual display
-      // sits in the phone's own display group (measured on One UI 8: displayGroupId 0 despite
-      // FLAG_OWN_DISPLAY_GROUP), so the phone would stay unlocked for as long as the panel
-      // runs. The health check wakes the device after a timeout instead, locked.
+      // Not keep_active. It would stop screen timeouts altogether, but the virtual display sits
+      // in the phone's own display group: from Android 14 scrcpy adds
+      // FLAG_DEVICE_DISPLAY_GROUP next to FLAG_OWN_DISPLAY_GROUP (measured on One UI 8:
+      // displayGroupId 0), so the phone would stay unlocked for as long as the panel runs.
+      // The health check wakes the device after a timeout instead, locked.
     });
     // Events from a stream this run has since let go of are not ours to act on.
     const live = () => this.stream === s;

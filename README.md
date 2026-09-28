@@ -296,10 +296,10 @@ health check finds it asleep. `androidPanel.wakeDevice` turns that off, at the c
 that cannot be clicked once the screen times out.
 
 scrcpy's `keep_active` would stop the timeout from firing at all, and is deliberately not used.
-A virtual display created with `FLAG_OWN_DISPLAY_GROUP` still sits in the phone's own display
-group -- measured on One UI 8, where `dumpsys display` shows `displayGroupId 0` for it and
-`dumpsys power` knows a single power group -- so reporting activity there would keep the phone
-itself from ever locking while the panel runs. Waking it after a timeout leaves it locked.
+From Android 14, scrcpy creates its virtual display with `FLAG_DEVICE_DISPLAY_GROUP` as well as
+`FLAG_OWN_DISPLAY_GROUP`, which puts it in the phone's own display group -- on One UI 8
+`dumpsys display` shows `displayGroupId 0` for it -- so reporting activity there would keep the
+phone itself from ever locking while the panel runs. Waking it after a timeout leaves it locked.
 
 In `screencap` mode frames are hashed and only pushed when the screen actually changed, so a static
 screen costs one `screencap` per interval and nothing else. That mode can only read **physical**
