@@ -95,7 +95,7 @@ for (const language of ['en', 'ko']) {
     let parsed = null;
     try { parsed = JSON.parse(table[1]); } catch (_) { /* the next check reports it */ }
     check('the string table is valid JSON', !!parsed);
-    check('it holds every webview string', parsed && Object.keys(parsed).length === 12,
+    check('it holds every webview string', parsed && Object.keys(parsed).length === 13,
       parsed && Object.keys(parsed).length + ' keys');
   }
   check('the decoder error keeps its placeholder', /decodeError[^,]*\{0\}/.test(html));
@@ -153,6 +153,13 @@ check('a scroll matches scrcpy',
   hex(S.scrollMessage({ x: 260, y: 1026, w: 1080, h: 1920 }, 16, -16, 1))
     === '030000010400000402043807807fff800000000001');
 check('a reset asks for a key frame', hex(S.resetVideoMessage()) === '11');
+check('text matches scrcpy', hex(S.textMessage('hello, world!')) === '010000000d' + Buffer.from('hello, world!').toString('hex'));
+check('a clipboard paste matches scrcpy',
+  hex(S.clipboardMessage('hello, world!', true, 0x0102030405060708n))
+    === '090102030405060708010000000d' + Buffer.from('hello, world!').toString('hex'));
+check('a paste asks for no acknowledgement by default', hex(S.clipboardMessage('a', true)).slice(2, 20) === '000000000000000001');
+check('Hangul goes on the clipboard as UTF-8', hex(S.clipboardMessage('한', true)).slice(20) === '00000003ed959c');
+check('text past the server limit is cut there', S.textMessage('x'.repeat(400)).length === 5 + S.INJECT_TEXT_MAX);
 const drag = hex(S.touchMessage(S.ACTION.move, { x: 1, y: 2, w: 3, h: 4 }));
 check('a touch is a finger, not the mouse', drag.slice(4, 20) === 'fffffffffffffffe', drag.slice(4, 20));
 check('a pressed finger has full pressure', drag.slice(44, 48) === 'ffff');
@@ -233,7 +240,8 @@ console.log('');
 
 // Screencap mode has no control socket and goes through `adb shell input`, whose commands
 // depend on the Android version: motionevent from 10, its CANCEL from 12, scroll from 14 QPR3.
-const { adbInputCommands, addScroll, InputShell, LEGACY_INPUT } = require(path.join(ROOT, 'extension.js'))._test;
+const { adbInputCommands, addScroll, InputShell, LEGACY_INPUT, typingOps, adbTypingCommand } =
+  require(path.join(ROOT, 'extension.js'))._test;
 const MODERN = { motionevent: true, cancel: true, scroll: true };
 const ANDROID_10 = { motionevent: true, cancel: false, scroll: false };
 const cmds = (caps, events, displayId) => {
@@ -247,7 +255,7 @@ check('input is aimed at the display in use',
 check('a wheel is a mouse scroll, source before display',
   cmds(MODERN, [{ type: 'scroll', x: 5, y: 6, w: 1440, h: 3120, dx: 0, dy: -1 }], 9)[0]
     === 'input mouse -d 9 scroll 5 6 --axis VSCROLL,-1.000 --axis HSCROLL,0.000');
-check('a key is a keyevent', cmds(LEGACY_INPUT, [{ type: 'key', code: 4 }])[0] === 'input keyevent 4');
+check('a key is a keyevent', adbTypingCommand({ kind: 'key', code: 4, meta: 0 }, null) === 'input keyevent 4');
 check('before Android 12 a cancel lifts instead',
   cmds(ANDROID_10, [T('down', 5, 5), T('cancel', 6, 6)])[1] === 'input motionevent UP 6 6');
 {
@@ -280,9 +288,33 @@ check('wheel turns add up while the shell is busy',
 check('nothing unknown reaches the shell',
   cmds(MODERN, [{ type: 'touch', action: 'rm -rf', x: 1, y: 2 }]).join() === ''
   && cmds(MODERN, [T('down', '1; reboot', 2)]).join() === ''
-  && cmds(MODERN, [{ type: 'key', code: '4; reboot' }]).join() === ''
+  && typingOps({ type: 'key', code: '4; reboot' }).length === 0
   && cmds(MODERN, [{ type: 'scroll', x: 1, y: 2, dx: 0, dy: '1; reboot' }]).join() === ''
   && cmds(MODERN, [{ type: 'touch', action: 'toString', x: 1, y: 2 }]).join() === '');
+
+// Typing. The device's key map types ASCII; anything else, Hangul included, has to be pasted.
+{
+  const ops = (m) => JSON.stringify(typingOps(m));
+  check('ASCII is typed', ops({ type: 'text', text: 'hi there' }) === '[{"kind":"text","text":"hi there"}]');
+  check('Hangul is pasted', ops({ type: 'text', text: '안녕' }) === '[{"kind":"paste","text":"안녕"}]');
+  check('mixed text keeps its order',
+    ops({ type: 'text', text: 'a한b' }) === '[{"kind":"text","text":"a"},{"kind":"paste","text":"한"},{"kind":"text","text":"b"}]');
+  check('line breaks and tabs become their keys',
+    ops({ type: 'text', text: 'a\r\nb\tc' }) === '[{"kind":"text","text":"a"},{"kind":"key","code":66,"meta":0},'
+      + '{"kind":"text","text":"b"},{"kind":"key","code":61,"meta":0},{"kind":"text","text":"c"}]');
+  check('other control characters are dropped', ops({ type: 'text', text: '\u0007\u001b' }) === '[]');
+  check('long ASCII is split at the server limit',
+    typingOps({ type: 'text', text: 'x'.repeat(700) }).map((o) => o.text.length).join() === '300,300,100');
+  check('Ctrl+V text is pasted whole, even ASCII', ops({ type: 'paste', text: 'a\nb' }) === '[{"kind":"paste","text":"a\\nb"}]');
+  check('a key keeps its modifiers', ops({ type: 'key', code: 29, meta: 0x3000 }) === '[{"kind":"key","code":29,"meta":12288}]');
+  check('a key code that is no key is dropped', ops({ type: 'key', code: 2 ** 40 }) === '[]' && ops({ type: 'key', code: -1 }) === '[]');
+  check('a meta state that is no meta state becomes none', ops({ type: 'key', code: 4, meta: 2 ** 40 }) === '[{"kind":"key","code":4,"meta":0}]');
+  check('screencap mode quotes text for the shell',
+    adbTypingCommand({ kind: 'text', text: "it's a $test" }, null) === "input text 'it'\\''s%sa%s$test'");
+  check('screencap mode cannot paste or hold modifiers',
+    adbTypingCommand({ kind: 'paste', text: '한' }, null) === null
+    && adbTypingCommand({ kind: 'key', code: 29, meta: 0x3000 }, null) === null);
+}
 
 // The shell, against a fake adb: one move in flight, stderr drained, and a stuck shell replaced.
 {

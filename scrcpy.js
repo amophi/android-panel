@@ -273,9 +273,14 @@ class ScrcpyStream extends EventEmitter {
 // ---------- control messages (scrcpy 4.1 app/src/control_msg.c) ----------
 
 const MSG_INJECT_KEYCODE = 0;
+const MSG_INJECT_TEXT = 1;
 const MSG_INJECT_TOUCH_EVENT = 2;
 const MSG_INJECT_SCROLL_EVENT = 3;
+const MSG_SET_CLIPBOARD = 9;
 const MSG_RESET_VIDEO = 17;
+
+// The server refuses longer text in one message; scrcpy's own client cuts it there too.
+const INJECT_TEXT_MAX = 300;
 
 /**
  * MotionEvent actions; KeyEvent's down and up share the first two. A cancel ends a touch
@@ -346,6 +351,37 @@ function keyMessage(action, keycode, repeat = 0, metaState = 0) {
   return b;
 }
 
+/**
+ * Text, typed key by key on the device. The server turns each character into key events
+ * through the virtual keyboard's key map, so only what that map has gets through -- in
+ * practice ASCII. Anything longer than the server takes is cut, as scrcpy's client does.
+ */
+function textMessage(text) {
+  let body = Buffer.from(text, 'utf8');
+  if (body.length > INJECT_TEXT_MAX) body = body.subarray(0, INJECT_TEXT_MAX);
+  const b = Buffer.alloc(5 + body.length);
+  b[0] = MSG_INJECT_TEXT;
+  b.writeUInt32BE(body.length, 1);
+  body.copy(b, 5);
+  return b;
+}
+
+/**
+ * Puts text on the device clipboard, and with `paste` presses the paste key on the display
+ * in use. This is how text the key map cannot type -- Hangul, for one -- reaches an app.
+ * Sequence 0 asks for no acknowledgement.
+ */
+function clipboardMessage(text, paste, sequence = 0n) {
+  const body = Buffer.from(text, 'utf8');
+  const b = Buffer.alloc(14 + body.length);
+  b[0] = MSG_SET_CLIPBOARD;
+  b.writeBigUInt64BE(BigInt.asUintN(64, BigInt(sequence)), 1);
+  b[9] = paste ? 1 : 0;
+  b.writeUInt32BE(body.length, 10);
+  body.copy(b, 14);
+  return b;
+}
+
 /** Asks for a fresh session: a session packet, then config and a key frame, right away. */
 function resetVideoMessage() {
   return Buffer.from([MSG_RESET_VIDEO]);
@@ -373,5 +409,8 @@ module.exports = {
   touchMessage,
   scrollMessage,
   keyMessage,
+  textMessage,
+  clipboardMessage,
   resetVideoMessage,
+  INJECT_TEXT_MAX,
 };

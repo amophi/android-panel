@@ -5,6 +5,7 @@ const path = require('path');
 const { execFile, spawn } = require('child_process');
 const {
   ScrcpyStream, codecStringFromConfig, ACTION, touchMessage, scrollMessage, keyMessage, resetVideoMessage,
+  textMessage, clipboardMessage, INJECT_TEXT_MAX,
 } = require('./scrcpy');
 
 const VIEW_ID = 'androidPanel.screen';
@@ -19,6 +20,15 @@ const KEY_WAKEUP = 'KEYCODE_WAKEUP';
 const IDLE_WAKE_MS = 30000;
 // Screencap mode. How long after input the next capture comes, instead of a full interval.
 const AFTER_INPUT_MS = 150;
+
+// Android key codes the keyboard path produces on its own, for line breaks and tabs in text.
+const KEYCODE_TAB = 61;
+const KEYCODE_ENTER = 66;
+// A paste leaves the text on the clipboard for the app to read when the paste key reaches it,
+// which happens a moment later. Typing on before then could swap the clipboard under it.
+const PASTE_GAP_MS = 80;
+// Kept well inside the 256 KiB the server reads in one message, even at four bytes a character.
+const PASTE_MAX_CHARS = 60000;
 
 // Servers this panel has started, so a later run can clean up after a crash without touching
 // a scrcpy session the user is running alongside it.
@@ -337,9 +347,9 @@ function addScroll(a, b) {
 }
 
 /**
- * The `input` command lines for one event from the webview, for when there is no scrcpy
- * control socket (screencap mode). Positions are already display pixels there: a screencap is
- * taken at full resolution, in the current rotation.
+ * The `input` command lines for one touch or wheel event from the webview, for when there is
+ * no scrcpy control socket (screencap mode). Positions are already display pixels there: a
+ * screencap is taken at full resolution, in the current rotation.
  *
  * Where the device has `motionevent`, a touch goes as one command per edge of the gesture
  * rather than as a tap or a swipe replayed after the fact: the device then sees how long a press
@@ -350,7 +360,6 @@ function addScroll(a, b) {
 function adbInputCommands(m, displayId, caps, gesture) {
   const d = displayId === null || displayId === undefined ? '' : ` -d ${displayId}`;
   const n = (v) => (Number.isFinite(v) ? Math.round(v) : null);
-  if (m.type === 'key') return Number.isInteger(m.code) ? [`input${d} keyevent ${m.code}`] : [];
   const x = n(m.x), y = n(m.y);
   if (x === null || y === null) return [];
 
@@ -400,6 +409,57 @@ function adbInputCommands(m, displayId, caps, gesture) {
     return [`input${d} swipe ${x} ${y} ${x2} ${y2} 400`];
   }
   return [];
+}
+
+/**
+ * What one keyboard message from the webview turns into, in order: key presses, runs of text
+ * the device's key map can type (printable ASCII), and runs that have to be pasted instead
+ * (everything else, Hangul included). Line breaks and tabs in text become their keys, and other
+ * control characters are dropped. Ctrl+V's text is pasted whole, whatever it contains.
+ */
+function typingOps(m) {
+  if (m.type === 'key') {
+    // Android key codes are small, and the meta state is a handful of flags; anything else
+    // is not a key, and would not fit the 32-bit fields it is written into.
+    if (!Number.isInteger(m.code) || m.code < 0 || m.code > 0xffff) return [];
+    const meta = Number.isInteger(m.meta) && m.meta >= 0 && m.meta <= 0x7fffffff ? m.meta : 0;
+    return [{ kind: 'key', code: m.code, meta: meta }];
+  }
+  if (typeof m.text !== 'string') return [];
+  const text = m.text.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '');
+  if (!text) return [];
+  if (m.type === 'paste') return [{ kind: 'paste', text: text.slice(0, PASTE_MAX_CHARS) }];
+  if (m.type !== 'text') return [];
+  const ops = [];
+  for (const part of text.match(/\r\n|[\r\n\t]|[\x20-\x7e]+|[^\x20-\x7e\r\n\t]+/g)) {
+    if (part === '\t') {
+      ops.push({ kind: 'key', code: KEYCODE_TAB, meta: 0 });
+    } else if (part === '\n' || part === '\r' || part === '\r\n') {
+      ops.push({ kind: 'key', code: KEYCODE_ENTER, meta: 0 });
+    } else if (/^[\x20-\x7e]/.test(part)) {
+      for (let i = 0; i < part.length; i += INJECT_TEXT_MAX) {
+        ops.push({ kind: 'text', text: part.slice(i, i + INJECT_TEXT_MAX) });
+      }
+    } else {
+      ops.push({ kind: 'paste', text: part });
+    }
+  }
+  return ops;
+}
+
+/**
+ * The `input` command line for one typing op in screencap mode, or null when `input` cannot
+ * do it: it has no clipboard to paste through, and its keyevent takes no modifiers, so a
+ * Ctrl+A sent as a bare A would type an "a" instead of selecting.
+ */
+function adbTypingCommand(op, displayId) {
+  const d = displayId === null || displayId === undefined ? '' : ` -d ${displayId}`;
+  if (op.kind === 'key') return op.meta ? null : `input${d} keyevent ${op.code}`;
+  if (op.kind !== 'text') return null;
+  // `input text` reads %s as a space, the only way older versions take one; the quotes keep
+  // the shell from reading anything in the text.
+  const arg = op.text.replace(/ /g, '%s').replace(/'/g, "'\\''");
+  return `input${d} text '${arg}'`;
 }
 
 const ACK = '__androidPanel_ack__';
@@ -531,6 +591,10 @@ class ScreenView {
     this.inputCaps = null;
     this.gesture = {};
     this.pendingScroll = null;
+    // Keyboard ops waiting their turn, and the timer holding them while a paste lands.
+    this.typing = [];
+    this.typingTimer = null;
+    this.warnedTyping = false;
   }
 
   resolveWebviewView(view) {
@@ -613,6 +677,10 @@ class ScreenView {
     }
     this.gesture = {};
     this.pendingScroll = null;
+    if (this.typingTimer) clearTimeout(this.typingTimer);
+    this.typingTimer = null;
+    this.typing = [];
+    this.warnedTyping = false;
     this.displayId = null;
     this.configPacket = null;
   }
@@ -858,17 +926,21 @@ class ScreenView {
 
   // ---------- input ----------
 
-  /** One input event from the webview: a touch, a wheel turn or a key. */
+  /** One input event from the webview: a touch, a wheel turn, a key, typed text or a paste. */
   input(m) {
     if (!this.started || !this.mode) return;
     const now = Date.now();
     const idle = now - this.lastInput;
     this.lastInput = now;
+    const keyboard = m.type === 'key' || m.type === 'text' || m.type === 'paste';
     if (this.mode === 'stream') {
-      if (this.stream) this.inputViaControl(m);
+      if (!this.stream) return;
+      if (keyboard) this.type(typingOps(m));
+      else this.inputViaControl(m);
       return;
     }
-    this.inputViaAdb(m, idle);
+    if (keyboard) this.typeViaAdb(m, idle);
+    else this.inputViaAdb(m, idle);
   }
 
   /**
@@ -883,13 +955,65 @@ class ScreenView {
         s.control(touchMessage(ACTION[m.action], m));
       } else if (m.type === 'scroll') {
         s.control(scrollMessage(m, m.dx, m.dy));
-      } else if (m.type === 'key' && Number.isInteger(m.code)) {
-        s.control(keyMessage(ACTION.down, m.code));
-        s.control(keyMessage(ACTION.up, m.code));
       }
     } catch (_) {
       /* a malformed position; the next event is independent of it */
     }
+  }
+
+  /**
+   * Stream mode keyboard. Keys and text go out strictly in the order they were typed, and
+   * after a paste the queue waits a moment: the app reads the clipboard only when the paste
+   * key reaches it, and text typed meanwhile must not have replaced it by then.
+   */
+  type(ops) {
+    if (!ops.length) return;
+    this.typing.push(...ops);
+    if (!this.typingTimer) this.drainTyping();
+  }
+
+  drainTyping() {
+    this.typingTimer = null;
+    while (this.typing.length) {
+      const s = this.stream;
+      if (!s) {
+        this.typing = [];
+        return;
+      }
+      const op = this.typing.shift();
+      if (op.kind === 'key') {
+        s.control(keyMessage(ACTION.down, op.code, 0, op.meta));
+        s.control(keyMessage(ACTION.up, op.code, 0, op.meta));
+      } else if (op.kind === 'text') {
+        s.control(textMessage(op.text));
+      } else if (op.kind === 'paste') {
+        s.control(clipboardMessage(op.text, true));
+        this.typingTimer = setTimeout(() => this.drainTyping(), PASTE_GAP_MS);
+        return;
+      }
+    }
+  }
+
+  /**
+   * Screencap mode keyboard, through the same shell as touches. `input` has no clipboard, so
+   * a paste goes as typed text, and what it cannot type at all -- anything but ASCII, or a key
+   * with modifiers -- is dropped, with a word about it the first time.
+   */
+  typeViaAdb(m, idle) {
+    const c = config();
+    if (!this.shell) this.shell = new InputShell(c.adb, this.serial, () => this.flushScroll());
+    this.flushScroll();
+    const ops = typingOps(m.type === 'paste' ? { type: 'text', text: m.text } : m);
+    const cmds = ops.map((op) => adbTypingCommand(op, this.displayId));
+    if (cmds.some((cmd) => cmd === null) && !this.warnedTyping) {
+      this.warnedTyping = true;
+      this.status(t('Screencap mode can only type plain ASCII text and keys without modifiers.'), 'warn');
+    }
+    const run = cmds.filter(Boolean);
+    if (!run.length) return;
+    if (c.wakeDevice && idle > IDLE_WAKE_MS) this.shell.run(`input keyevent ${KEY_WAKEUP}`);
+    for (const cmd of run) this.shell.run(cmd);
+    this.captureSoon();
   }
 
   /** Screencap mode, which has no scrcpy server and so no control socket. */
@@ -1016,6 +1140,8 @@ class ScreenView {
       case 'touch':
       case 'scroll':
       case 'key':
+      case 'text':
+      case 'paste':
         this.input(m);
         break;
       case 'need-key':
@@ -1053,6 +1179,7 @@ class ScreenView {
       waiting: t('Waiting for the device screen…'),
       noWebCodecs: t('This editor does not support WebCodecs. Change mode to screencap in the settings.'),
       decodeError: t('Decoding error: {0}'),
+      typing: t('Type on the device'),
     };
     // Keep '<' out of the JSON so no translation can close the script tag early.
     const uiJson = JSON.stringify(ui).replace(/</g, '\\u003c');
@@ -1100,6 +1227,20 @@ class ScreenView {
     touch-action: none; user-select: none; -webkit-user-drag: none;
   }
   #wrap.wide #screen, #wrap.wide #shot { width: 100%; height: auto; max-height: none; }
+  /* While keystrokes go to the device, the picture says so. */
+  #wrap.typing #screen, #wrap.typing #shot { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+  /* Keystrokes land in a textarea nobody sees, so the editor's IME can compose into it. */
+  #keys {
+    position: fixed; left: 8px; bottom: 8px; width: 1px; height: 1px;
+    margin: 0; padding: 0; border: 0; opacity: 0; resize: none; overflow: hidden; pointer-events: none;
+  }
+  #ime {
+    position: fixed; left: 8px; bottom: 8px; z-index: 3; display: none;
+    padding: 2px 6px; border-radius: 3px;
+    color: var(--vscode-editorWidget-foreground, var(--vscode-foreground));
+    background: var(--vscode-editorWidget-background, var(--vscode-sideBar-background));
+    border: 1px solid var(--vscode-focusBorder, transparent);
+  }
   #empty { opacity: .6; padding: 16px; text-align: center; line-height: 1.6; }
   #picker {
     position: absolute; inset: 0; display: none; flex-direction: column;
@@ -1142,6 +1283,8 @@ class ScreenView {
       <div id="list"></div>
     </div>
   </div>
+  <textarea id="keys" aria-label="${esc(ui.typing)}" autocomplete="off" autocapitalize="off" spellcheck="false"></textarea>
+  <div id="ime"></div>
 <script nonce="${nonce}">
 (function () {
   const S = ${uiJson};
@@ -1150,6 +1293,8 @@ class ScreenView {
   const shot = document.getElementById('shot');
   const empty = document.getElementById('empty');
   const status = document.getElementById('status');
+  const keys = document.getElementById('keys');
+  const ime = document.getElementById('ime');
   const ctx = canvas.getContext('2d');
   // The size of the picture on show, in its own pixels. Input goes out in these pixels with
   // the size attached, and the server maps it onto the display itself -- scaling and rotation
@@ -1312,6 +1457,7 @@ class ScreenView {
       pendingMove = null;
       wheel = null;
       lastTouch = null;
+      showComposition('');
     } else if (m.type === 'frame') {
       picture = { w: m.w, h: m.h };
       shot.src = 'data:image/png;base64,' + m.data;
@@ -1362,7 +1508,11 @@ class ScreenView {
   let finger = null, pendingMove = null, moveQueued = false;
 
   function press(e) {
-    if (e.button !== 0 || finger) return;
+    if (e.button !== 0) return;
+    // Clicking the screen is also how the keyboard gets to the device (see below). The
+    // default focus change is prevented with the press, so the focus moves here instead.
+    keys.focus({ preventScroll: true });
+    if (finger) return;
     const p = toPicture(e, true);
     if (!p) return;
     e.preventDefault();
@@ -1433,6 +1583,86 @@ class ScreenView {
   });
   // An image is draggable by default, and a native drag swallows the rest of the gesture.
   shot.draggable = false;
+
+  // The keyboard. Text arrives through input events, so the editor's own IME composes Hangul
+  // as usual and only finished characters are sent; what is still being composed is shown
+  // over the picture meanwhile. Keys that type nothing -- Enter, Backspace, arrows -- and
+  // anything held with Ctrl, Alt or Meta go as Android key codes instead.
+  const KEYCODES = {
+    Enter: 66, Backspace: 67, Delete: 112, Tab: 61, Escape: 111,
+    ArrowUp: 19, ArrowDown: 20, ArrowLeft: 21, ArrowRight: 22,
+    Home: 122, End: 123, PageUp: 92, PageDown: 93,
+  };
+  let composing = false;
+
+  // KeyEvent meta state: each modifier's general flag together with its left-hand one.
+  function metaState(e) {
+    return (e.shiftKey ? 0x41 : 0) | (e.altKey ? 0x12 : 0) | (e.ctrlKey ? 0x3000 : 0) | (e.metaKey ? 0x30000 : 0);
+  }
+
+  // With a modifier held, a letter or digit is a shortcut rather than text: Ctrl+A selects.
+  // The physical key decides, so the shortcut is the same whatever the input language.
+  function shortcutCode(e) {
+    const letter = /^Key([A-Z])$/.exec(e.code);
+    if (letter) return 29 + letter[1].charCodeAt(0) - 65;
+    const digit = /^Digit([0-9])$/.exec(e.code);
+    if (digit) return 7 + Number(digit[1]);
+    return undefined;
+  }
+
+  function sendText(text) {
+    if (text) vs.postMessage({ type: 'text', text: text });
+  }
+
+  function showComposition(text) {
+    ime.textContent = text || '';
+    ime.style.display = text ? 'block' : 'none';
+  }
+
+  keys.addEventListener('keydown', (e) => {
+    if (e.isComposing || e.keyCode === 229) return; // the IME owns keys while it composes
+    const shortcut = e.ctrlKey || e.altKey || e.metaKey;
+    // Ctrl+V pastes the computer's clipboard; its text comes with the paste event.
+    if (shortcut && !e.altKey && e.code === 'KeyV') return;
+    let code = KEYCODES[e.key];
+    if (code === undefined && shortcut) code = shortcutCode(e);
+    if (code === undefined) return; // it types something, and that arrives as input
+    e.preventDefault();
+    vs.postMessage({ type: 'key', code: code, meta: metaState(e) });
+  });
+
+  keys.addEventListener('beforeinput', (e) => {
+    // A composition belongs to the IME until it ends; compositionend brings the result.
+    if (e.isComposing || /Composition/.test(e.inputType)) return;
+    e.preventDefault();
+    if (e.inputType === 'insertText' || e.inputType === 'insertReplacementText') sendText(e.data);
+    else if (e.inputType === 'insertLineBreak' || e.inputType === 'insertParagraph') {
+      vs.postMessage({ type: 'key', code: KEYCODES.Enter, meta: 0 });
+    }
+  });
+
+  keys.addEventListener('compositionstart', () => { composing = true; });
+  keys.addEventListener('compositionupdate', (e) => showComposition(e.data));
+  keys.addEventListener('compositionend', (e) => {
+    composing = false;
+    showComposition('');
+    sendText(e.data);
+    // Korean IMEs start the next syllable straight away; clear only once none has begun.
+    setTimeout(() => { if (!composing) keys.value = ''; }, 0);
+  });
+
+  keys.addEventListener('paste', (e) => {
+    e.preventDefault();
+    const text = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
+    if (text) vs.postMessage({ type: 'paste', text: text });
+  });
+
+  keys.addEventListener('focus', () => wrap.classList.add('typing'));
+  keys.addEventListener('blur', () => {
+    wrap.classList.remove('typing');
+    showComposition('');
+    keys.value = '';
+  });
 
   document.getElementById('back').onclick = () => vs.postMessage({ type: 'key', code: 4 });
   document.getElementById('home').onclick = () => vs.postMessage({ type: 'key', code: 3 });
@@ -1513,4 +1743,8 @@ function activate(context) {
 
 function deactivate() {}
 
-module.exports = { activate, deactivate, _test: { adbInputCommands, addScroll, InputShell, LEGACY_INPUT } };
+module.exports = {
+  activate,
+  deactivate,
+  _test: { adbInputCommands, addScroll, InputShell, LEGACY_INPUT, typingOps, adbTypingCommand },
+};

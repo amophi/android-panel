@@ -148,6 +148,7 @@ will not lock itself again while the panel is open.
 | Click | A finger pressed and lifted, for as long as the button is held |
 | Drag | A finger dragged, live, along the path the mouse takes |
 | Wheel | A mouse wheel scroll at the pointer, one notch at a time |
+| Keyboard | After a click on the screen: text, Enter, Backspace, arrows, shortcuts. Ctrl+V pastes the computer's clipboard |
 | ← / ⌂ | Back / Home key events |
 | ▶ | Launch the configured package |
 | ↻ | Re-detect the device |
@@ -164,6 +165,27 @@ with it. Positions are sent in pixels of the frame on show, with that frame's si
 maps them onto the display through its own scaling and rotation. It drops an event measured against
 a size that is no longer current, so a click in flight during a rotation is lost rather than
 misplaced, and a finger held down across one is cancelled rather than released as a click.
+
+### Typing
+
+A click on the screen also sends the keyboard there; the picture gets an outline while it does,
+and a click anywhere else in the editor takes the keyboard back. Text is typed through the
+editor's own input method, so Korean, Japanese or any other IME composes as usual: what is still
+being composed shows over the picture, and each finished character is sent. Keys that type
+nothing -- Enter, Backspace, Delete, Tab, Escape, the arrows, Home, End, Page Up and Down -- and
+any letter or digit held with Ctrl, Alt or Meta are sent as Android key presses, so Ctrl+A
+selects all on the device whatever the input language.
+
+How the text gets in depends on what it is. The scrcpy server types text key by key through the
+virtual keyboard's key map, which covers ASCII and nothing else, so ASCII goes that way. Anything
+else -- Hangul, for one -- is put on the device clipboard and pasted, which is the only way an app
+can be handed it without an input method installed for the purpose. Two things follow: the
+device clipboard is left holding the last text pasted this way, and the app must accept the paste
+key, as ordinary text fields do. Ctrl+V pastes the computer's clipboard the same way.
+
+In `screencap` mode there is no clipboard to paste through and `input keyevent` takes no
+modifiers, so only ASCII text and plain keys get through, and the panel says so the first time
+something does not.
 
 ## Stream protocol
 
@@ -200,7 +222,8 @@ which is configured from the profile and level found in the SPS, and set up agai
 session.
 
 Input goes over the control socket, in the messages scrcpy's own client writes: touch, scroll and
-key events, and `RESET_VIDEO` when the webview's decoder needs a key frame to start again from.
+key events, text, a clipboard paste for text the key map cannot type, and `RESET_VIDEO` when the
+webview's decoder needs a key frame to start again from.
 The server injects them itself, so an event costs a socket write rather than an `adb shell input`
 process, and a touch is a finger on a touchscreen, which is the only kind of input many games read.
 `clipboard_autosync=false` keeps the server from sending the phone's clipboard back on the same

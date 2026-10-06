@@ -27,5 +27,7 @@
   "Could not read the screen size. Set newDisplay instead.": "화면 크기를 읽지 못했습니다. newDisplay 를 직접 넣어주세요.",
   "Waiting for the device screen…": "기기 화면을 기다리는 중…",
   "This editor does not support WebCodecs. Change mode to screencap in the settings.": "이 에디터는 WebCodecs 를 지원하지 않습니다. 설정에서 mode 를 screencap 으로 바꾸세요.",
-  "Decoding error: {0}": "디코딩 오류: {0}"
+  "Decoding error: {0}": "디코딩 오류: {0}",
+  "Type on the device": "기기에 입력",
+  "Screencap mode can only type plain ASCII text and keys without modifiers.": "screencap 모드에서는 영문·숫자 같은 ASCII 문자와 조합키 없는 키만 입력할 수 있습니다."
 }
