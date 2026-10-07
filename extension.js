@@ -1180,6 +1180,7 @@ class ScreenView {
       noWebCodecs: t('This editor does not support WebCodecs. Change mode to screencap in the settings.'),
       decodeError: t('Decoding error: {0}'),
       typing: t('Type on the device'),
+      close: t('Close'),
     };
     // Keep '<' out of the JSON so no translation can close the script tag early.
     const uiJson = JSON.stringify(ui).replace(/</g, '\\u003c');
@@ -1242,13 +1243,20 @@ class ScreenView {
     border: 1px solid var(--vscode-focusBorder, transparent);
   }
   #empty { opacity: .6; padding: 16px; text-align: center; line-height: 1.6; }
+  /* The picker covers the screen but not the toolbar, so the app button that opened it can
+     close it again; its top is set to the toolbar's height when it opens. */
   #picker {
-    position: absolute; inset: 0; display: none; flex-direction: column;
+    position: fixed; left: 0; right: 0; bottom: 0; top: 0; display: none; flex-direction: column;
     background: var(--vscode-sideBar-background); z-index: 2;
   }
   #picker.open { display: flex; }
+  #apps.on {
+    background: var(--vscode-button-secondaryHoverBackground, rgba(128,128,128,.2));
+    border-color: var(--vscode-focusBorder, currentColor);
+  }
+  #pickhead { display: flex; gap: 4px; align-items: center; padding: 6px; flex: 0 0 auto; }
   #filter {
-    margin: 6px; padding: 4px 6px; font: inherit; flex: 0 0 auto;
+    flex: 1 1 auto; min-width: 0; margin: 0; padding: 4px 6px; font: inherit;
     color: var(--vscode-input-foreground, inherit);
     background: var(--vscode-input-background, transparent);
     border: 1px solid var(--vscode-input-border, rgba(128,128,128,.4));
@@ -1279,7 +1287,10 @@ class ScreenView {
     <img id="shot" alt="">
     <div id="empty">${esc(ui.waiting)}</div>
     <div id="picker">
-      <input id="filter" type="text" placeholder="${esc(ui.search)}">
+      <div id="pickhead">
+        <input id="filter" type="text" placeholder="${esc(ui.search)}">
+        <button id="pickclose" title="${esc(ui.close)}" aria-label="${esc(ui.close)}">✕</button>
+      </div>
       <div id="list"></div>
     </div>
   </div>
@@ -1692,23 +1703,36 @@ class ScreenView {
       row.appendChild(s);
       row.onclick = () => {
         vs.postMessage({ type: 'start', component: a.component });
-        picker.classList.remove('open');
+        closePicker();
       };
       list.appendChild(row);
     }
   }
 
-  filter.oninput = renderApps;
-  filter.onkeydown = (e) => { if (e.key === 'Escape') picker.classList.remove('open'); };
-  document.getElementById('apps').onclick = () => {
-    const open = picker.classList.toggle('open');
-    if (!open) return;
+  // Three ways out: the close button, Escape, and the app button again, which stays pressed
+  // while the picker is open.
+  const appsButton = document.getElementById('apps');
+
+  function openPicker() {
+    picker.style.top = document.getElementById('bar').offsetHeight + 'px';
+    picker.classList.add('open');
+    appsButton.classList.add('on');
     filter.value = '';
     apps = null;
     renderApps();
     vs.postMessage({ type: 'apps' });
     filter.focus();
-  };
+  }
+
+  function closePicker() {
+    picker.classList.remove('open');
+    appsButton.classList.remove('on');
+  }
+
+  filter.oninput = renderApps;
+  filter.onkeydown = (e) => { if (e.key === 'Escape') closePicker(); };
+  document.getElementById('pickclose').onclick = closePicker;
+  appsButton.onclick = () => (picker.classList.contains('open') ? closePicker() : openPicker());
 
   // Fill the sidebar's width and scroll, or shrink until the whole screen fits.
   const wrap = document.getElementById('wrap');

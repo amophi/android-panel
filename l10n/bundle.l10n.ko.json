@@ -29,5 +29,6 @@
   "This editor does not support WebCodecs. Change mode to screencap in the settings.": "이 에디터는 WebCodecs 를 지원하지 않습니다. 설정에서 mode 를 screencap 으로 바꾸세요.",
   "Decoding error: {0}": "디코딩 오류: {0}",
   "Type on the device": "기기에 입력",
+  "Close": "닫기",
   "Screencap mode can only type plain ASCII text and keys without modifiers.": "screencap 모드에서는 영문·숫자 같은 ASCII 문자와 조합키 없는 키만 입력할 수 있습니다."
 }

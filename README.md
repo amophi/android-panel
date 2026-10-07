@@ -152,7 +152,7 @@ will not lock itself again while the panel is open.
 | ← / ⌂ | Back / Home key events |
 | ▶ | Launch the configured package |
 | ↻ | Re-detect the device |
-| ⊞ | List the device's apps and start one here |
+| ⊞ | List the device's apps and start one here. ✕, Escape or ⊞ again closes the list |
 | ⤢ | Toggle between fitting the whole screen and filling the panel width |
 
 Every edge of a gesture reaches the device as it happens: down on press, moves while dragging, up
