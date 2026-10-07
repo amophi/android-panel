@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.3.0
+
+- Input goes over scrcpy's control socket instead of one `adb shell input` process per event.
+  Measured on a Galaxy S25+, a touch now reaches Android's input dispatcher in a median 2 ms,
+  against 70 ms before. Every edge of a gesture is sent as it happens -- down on press, moves
+  while dragging, up on release -- so a hold is a long press and a drag that stops before
+  release no longer flings on. Touches are a finger on a touchscreen, which many games need.
+- The wheel scrolls one Android notch per notch, at the pointer. It used to send a fast
+  28%-of-the-screen swipe that ended in a fling, about ten times a real wheel notch.
+- Apps that switch to landscape no longer break the stream. scrcpy 4 marks every size change
+  with a 12-byte session header, which was read as a frame header; the first rotation threw the
+  parser off and ended the stream as "corrupt", taking the app on the virtual display with it.
+  Positions are now sent with the frame size and mapped by the server, so taps land right in
+  either orientation, and a finger held across a rotation is cancelled rather than left down.
+- Keyboard input. A click on the screen sends the keyboard to the device: text through the
+  editor's own IME, so Korean and other languages compose as usual, plus Enter, Backspace, the
+  arrows and Ctrl shortcuts. Text outside ASCII is pasted through the device clipboard, which
+  is left holding it. Ctrl+V pastes the computer's clipboard.
+- The app list can be closed again: it no longer covers the toolbar, and ✕, Escape or the app
+  button closes it.
+- The picture recovers by itself: a decoder error or a decoder falling behind asks the server
+  for a fresh key frame instead of waiting up to ten seconds, frames are drawn once per display
+  refresh, newest only, and a failure message is no longer painted over by a late frame.
+- `screencap` mode keeps one `adb shell` open for input, sends gestures as live
+  `input motionevent`s and the wheel as `input mouse scroll`, falls back to `tap`/`swipe` on
+  Android versions without them, and captures again right after input.
+- Reconnecting while the panel is still starting no longer leaves a second server running, and
+  input in that moment is dropped instead of leaking out through adb.
+- The server is started with `clipboard_autosync=false`, so the phone's clipboard never comes
+  back to the computer, and `power_on=false`, so `wakeDevice` alone decides whether the screen
+  is woken. scrcpy 3.x and older, whose stream format differs, are refused with a clear message.
+
 ## 0.2.4
 
 Documentation only.
