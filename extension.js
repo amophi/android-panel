@@ -1,19 +1,27 @@
-const vscode = require('vscode');
-const crypto = require('crypto');
-const fs = require('fs');
-const path = require('path');
-const { execFile, spawn } = require('child_process');
+const vscode = require("vscode");
+const crypto = require("crypto");
+const fs = require("fs");
+const path = require("path");
+const { execFile, spawn } = require("child_process");
 const {
-  ScrcpyStream, codecStringFromConfig, ACTION, touchMessage, scrollMessage, keyMessage, resetVideoMessage,
-  textMessage, clipboardMessage, INJECT_TEXT_MAX,
-} = require('./scrcpy');
+  ScrcpyStream,
+  codecStringFromConfig,
+  ACTION,
+  touchMessage,
+  scrollMessage,
+  keyMessage,
+  resetVideoMessage,
+  textMessage,
+  clipboardMessage,
+  INJECT_TEXT_MAX,
+} = require("./scrcpy");
 
-const VIEW_ID = 'androidPanel.screen';
+const VIEW_ID = "androidPanel.screen";
 
 // A sleeping device swallows injected taps as wake-up gestures instead of delivering them to
 // the app, so the panel streams fine while nothing responds to a click. Being locked is not
 // the problem -- being asleep is.
-const KEY_WAKEUP = 'KEYCODE_WAKEUP';
+const KEY_WAKEUP = "KEYCODE_WAKEUP";
 
 // Screencap mode. A gesture after this long without input wakes the device first, since
 // nothing else notices that a screen timeout has put it to sleep.
@@ -32,7 +40,7 @@ const PASTE_MAX_CHARS = 60000;
 
 // Servers this panel has started, so a later run can clean up after a crash without touching
 // a scrcpy session the user is running alongside it.
-const SCIDS_KEY = 'startedScids';
+const SCIDS_KEY = "startedScids";
 
 /** User-facing text. English is the source language; l10n/bundle.l10n.*.json overlays translations. */
 const t = (message, ...args) => vscode.l10n.t(message, ...args);
@@ -40,31 +48,37 @@ const t = (message, ...args) => vscode.l10n.t(message, ...args);
 /** scrcpy.js reports why a stream ended as a code; anything else is already a message. */
 function closeReason(code) {
   switch (code) {
-    case 'server-exited': return t('The server on the device exited.');
-    case 'stream-corrupt': return t('The stream is corrupt.');
-    case 'stream-ended': return t('The stream was interrupted.');
-    case 'stream-disabled': return t('The device could not set up the video stream.');
-    default: return code || t('The stream was interrupted.');
+    case "server-exited":
+      return t("The server on the device exited.");
+    case "stream-corrupt":
+      return t("The stream is corrupt.");
+    case "stream-ended":
+      return t("The stream was interrupted.");
+    case "stream-disabled":
+      return t("The device could not set up the video stream.");
+    default:
+      return code || t("The stream was interrupted.");
   }
 }
 
 function config() {
-  const c = vscode.workspace.getConfiguration('androidPanel');
+  const c = vscode.workspace.getConfiguration("androidPanel");
   return {
-    mode: c.get('mode') || 'stream',
-    show: c.get('show') === 'app' ? 'app' : 'phone',
-    adb: (c.get('adbPath') || '').trim() || RESOLVED.adb || 'adb',
-    pkg: (c.get('package') || '').trim(),
-    interval: Math.max(150, c.get('intervalMs') || 600),
-    serial: (c.get('serial') || '').trim(),
-    serverPath: (c.get('scrcpyServerPath') || '').trim() || RESOLVED.serverPath || '',
-    version: (c.get('scrcpyVersion') || '').trim(),
-    newDisplay: (c.get('newDisplay') || '').trim(),
-    maxFps: c.get('maxFps') || 0,
-    maxSize: c.get('maxSize') || 0,
-    stayAwake: c.get('stayAwake') === true,
-    wakeDevice: c.get('wakeDevice') !== false,
-    keepAlive: c.get('keepStreamWhenHidden') !== false,
+    mode: c.get("mode") || "stream",
+    show: c.get("show") === "app" ? "app" : "phone",
+    adb: (c.get("adbPath") || "").trim() || RESOLVED.adb || "adb",
+    pkg: (c.get("package") || "").trim(),
+    interval: Math.max(150, c.get("intervalMs") || 600),
+    serial: (c.get("serial") || "").trim(),
+    serverPath:
+      (c.get("scrcpyServerPath") || "").trim() || RESOLVED.serverPath || "",
+    version: (c.get("scrcpyVersion") || "").trim(),
+    newDisplay: (c.get("newDisplay") || "").trim(),
+    maxFps: c.get("maxFps") || 0,
+    maxSize: c.get("maxSize") || 0,
+    stayAwake: c.get("stayAwake") === true,
+    wakeDevice: c.get("wakeDevice") !== false,
+    keepAlive: c.get("keepStreamWhenHidden") !== false,
   };
 }
 
@@ -74,44 +88,53 @@ const RESOLVED = { adb: null, serverPath: null };
 const LF = String.fromCharCode(10);
 
 function which(cmd) {
-  const finder = process.platform === 'win32' ? 'where' : 'which';
+  const finder = process.platform === "win32" ? "where" : "which";
   return new Promise((res) =>
     execFile(finder, [cmd], { timeout: 5000, windowsHide: true }, (e, out) => {
       if (e) return res(null);
       const first = String(out).split(LF)[0].trim();
       res(first || null);
-    })
+    }),
   );
 }
 
 async function ensureResolved() {
-  const c = vscode.workspace.getConfiguration('androidPanel');
-  const adbSet = (c.get('adbPath') || '').trim();
-  const srvSet = (c.get('scrcpyServerPath') || '').trim();
+  const c = vscode.workspace.getConfiguration("androidPanel");
+  const adbSet = (c.get("adbPath") || "").trim();
+  const srvSet = (c.get("scrcpyServerPath") || "").trim();
   if ((adbSet || RESOLVED.adb) && (srvSet || RESOLVED.serverPath)) return;
 
   const dirs = [];
-  const add = (d) => { if (d && dirs.indexOf(d) < 0) dirs.push(d); };
+  const add = (d) => {
+    if (d && dirs.indexOf(d) < 0) dirs.push(d);
+  };
   // A scrcpy release keeps adb and scrcpy-server in one folder, so finding either finds both.
-  for (const exe of ['scrcpy', 'adb']) {
+  for (const exe of ["scrcpy", "adb"]) {
     const found = await which(exe);
     if (found) add(path.dirname(found));
   }
   if (adbSet) add(path.dirname(adbSet));
   if (srvSet) add(path.dirname(srvSet));
-  const home = require('os').homedir();
-  add(path.join(process.env.LOCALAPPDATA || '', 'Android', 'Sdk', 'platform-tools'));
-  add(path.join(process.env.LOCALAPPDATA || '', 'scrcpy'));
-  add(path.join(home, 'Android', 'Sdk', 'platform-tools'));
-  add(path.join(home, 'Library', 'Android', 'sdk', 'platform-tools'));
-  add('/usr/local/bin');
-  add('/usr/bin');
-  add('/opt/homebrew/bin');
+  const home = require("os").homedir();
+  add(
+    path.join(
+      process.env.LOCALAPPDATA || "",
+      "Android",
+      "Sdk",
+      "platform-tools",
+    ),
+  );
+  add(path.join(process.env.LOCALAPPDATA || "", "scrcpy"));
+  add(path.join(home, "Android", "Sdk", "platform-tools"));
+  add(path.join(home, "Library", "Android", "sdk", "platform-tools"));
+  add("/usr/local/bin");
+  add("/usr/bin");
+  add("/opt/homebrew/bin");
 
   // A scrcpy release is usually unpacked as a versioned folder, such as scrcpy-win64-v4.1,
   // so any folder with scrcpy in its name is swept one level down.
   for (const d of dirs.slice()) {
-    if (path.basename(d).toLowerCase().indexOf('scrcpy') < 0) continue;
+    if (path.basename(d).toLowerCase().indexOf("scrcpy") < 0) continue;
     try {
       for (const e of fs.readdirSync(d, { withFileTypes: true })) {
         if (e.isDirectory()) add(path.join(d, e.name));
@@ -123,16 +146,22 @@ async function ensureResolved() {
 
   if (!adbSet && !RESOLVED.adb) {
     outer: for (const d of dirs) {
-      for (const n of ['adb.exe', 'adb']) {
+      for (const n of ["adb.exe", "adb"]) {
         const f = path.join(d, n);
-        if (fs.existsSync(f)) { RESOLVED.adb = f; break outer; }
+        if (fs.existsSync(f)) {
+          RESOLVED.adb = f;
+          break outer;
+        }
       }
     }
   }
   if (!srvSet && !RESOLVED.serverPath) {
     for (const d of dirs) {
-      const f = path.join(d, 'scrcpy-server');
-      if (fs.existsSync(f)) { RESOLVED.serverPath = f; break; }
+      const f = path.join(d, "scrcpy-server");
+      if (fs.existsSync(f)) {
+        RESOLVED.serverPath = f;
+        break;
+      }
     }
   }
 }
@@ -143,28 +172,43 @@ function adb(bin, args, { binary = false, timeout = 20000 } = {}) {
     execFile(
       bin,
       args,
-      { encoding: binary ? 'buffer' : 'utf8', maxBuffer: 64 * 1024 * 1024, timeout, windowsHide: true },
-      (err, stdout) => (err ? reject(err) : resolve(stdout))
+      {
+        encoding: binary ? "buffer" : "utf8",
+        maxBuffer: 64 * 1024 * 1024,
+        timeout,
+        windowsHide: true,
+      },
+      (err, stdout) => (err ? reject(err) : resolve(stdout)),
     );
   });
 }
 
 /** An emulator may be attached alongside, so when a package is set, prefer the device that has it. */
 async function pickSerial(bin, pkg) {
-  const out = await adb(bin, ['devices']);
+  const out = await adb(bin, ["devices"]);
   const ready = out
     .split(/\r?\n/)
     .slice(1)
     .map((l) => l.trim().split(/\s+/))
-    .filter((p) => p.length >= 2 && p[1] === 'device')
+    .filter((p) => p.length >= 2 && p[1] === "device")
     .map((p) => p[0]);
   if (!ready.length) return null;
-  ready.sort((a, b) => Number(a.startsWith('emulator-')) - Number(b.startsWith('emulator-')));
+  ready.sort(
+    (a, b) =>
+      Number(a.startsWith("emulator-")) - Number(b.startsWith("emulator-")),
+  );
   if (!pkg) return ready[0];
   for (const s of ready) {
     try {
-      const r = await adb(bin, ['-s', s, 'shell', 'pm', 'path', packageOf(pkg)]);
-      if (r.includes('package:')) return s;
+      const r = await adb(bin, [
+        "-s",
+        s,
+        "shell",
+        "pm",
+        "path",
+        packageOf(pkg),
+      ]);
+      if (r.includes("package:")) return s;
     } catch (_) {
       /* try the next device */
     }
@@ -180,13 +224,18 @@ const versionCache = new Map();
 async function detectVersion(serverPath) {
   if (versionCache.has(serverPath)) return versionCache.get(serverPath);
   const dir = path.dirname(serverPath);
-  for (const exe of ['scrcpy.exe', 'scrcpy']) {
+  for (const exe of ["scrcpy.exe", "scrcpy"]) {
     const candidate = path.join(dir, exe);
     if (!fs.existsSync(candidate)) continue;
     try {
       const out = await new Promise((res, rej) =>
-        execFile(candidate, ['--version'], { timeout: 10000, windowsHide: true },
-          (e, so) => (e ? rej(e) : res(so))));
+        execFile(
+          candidate,
+          ["--version"],
+          { timeout: 10000, windowsHide: true },
+          (e, so) => (e ? rej(e) : res(so)),
+        ),
+      );
       const m = /scrcpy\s+([0-9][^\s<]*)/.exec(out);
       if (m) {
         versionCache.set(serverPath, m[1]);
@@ -206,8 +255,8 @@ async function detectVersion(serverPath) {
  */
 async function isLocked(bin, serial) {
   try {
-    const out = await adb(bin, ['-s', serial, 'shell', 'dumpsys', 'window']);
-    return out.indexOf('mDreamingLockscreen=true') >= 0;
+    const out = await adb(bin, ["-s", serial, "shell", "dumpsys", "window"]);
+    return out.indexOf("mDreamingLockscreen=true") >= 0;
   } catch (_) {
     return false;
   }
@@ -219,25 +268,49 @@ async function isLocked(bin, serial) {
  */
 async function deviceDisplaySpec(bin, serial) {
   const [size, density] = await Promise.all([
-    adb(bin, ['-s', serial, 'shell', 'wm', 'size']),
-    adb(bin, ['-s', serial, 'shell', 'wm', 'density']),
+    adb(bin, ["-s", serial, "shell", "wm", "size"]),
+    adb(bin, ["-s", serial, "shell", "wm", "density"]),
   ]);
   // An override is the value in force; the physical one is only a fallback.
   const pick = (text, what) => {
-    const over = new RegExp('Override ' + what + ':\\s*(\\S+)').exec(text);
-    const phys = new RegExp('Physical ' + what + ':\\s*(\\S+)').exec(text);
+    const over = new RegExp("Override " + what + ":\\s*(\\S+)").exec(text);
+    const phys = new RegExp("Physical " + what + ":\\s*(\\S+)").exec(text);
     return (over || phys || [])[1] || null;
   };
-  const wh = pick(size, 'size');
-  const dpi = pick(density, 'density');
-  return wh && dpi && /^\d+x\d+$/.test(wh) && /^\d+$/.test(dpi) ? wh + '/' + dpi : null;
+  const wh = pick(size, "size");
+  const dpi = pick(density, "density");
+  return wh && dpi && /^\d+x\d+$/.test(wh) && /^\d+$/.test(dpi)
+    ? wh + "/" + dpi
+    : null;
 }
 
 // Segments that say nothing about which app this is.
 const PACKAGE_NOISE = new Set([
-  'com', 'org', 'net', 'io', 'co', 'kr', 'jp', 'cn', 'us', 'de', 'me', 'tv',
-  'android', 'google', 'samsung', 'sec', 'apps', 'app', 'mobile', 'client',
-  'ad', 'ads', 'free', 'lite', 'main',
+  "com",
+  "org",
+  "net",
+  "io",
+  "co",
+  "kr",
+  "jp",
+  "cn",
+  "us",
+  "de",
+  "me",
+  "tv",
+  "android",
+  "google",
+  "samsung",
+  "sec",
+  "apps",
+  "app",
+  "mobile",
+  "client",
+  "ad",
+  "ads",
+  "free",
+  "lite",
+  "main",
 ]);
 
 /**
@@ -250,28 +323,56 @@ const PACKAGE_NOISE = new Set([
  * segment when everything was dropped.
  */
 function appName(pkg) {
-  const parts = pkg.split('.').filter(Boolean);
+  const parts = pkg.split(".").filter(Boolean);
   const meaningful = parts.filter((s) => {
     if (PACKAGE_NOISE.has(s.toLowerCase())) return false;
     // Store ids such as A000Z00040 or v2 carry no meaning either.
     return !/\d/.test(s) || /[a-z]{4}/.test(s);
   });
   const pool = meaningful.length ? meaningful : parts;
-  const pick = pool.reduce((best, s) => (s.length > best.length ? s : best), '');
-  const label = (pick || pkg).replace(/[_-]+/g, ' ').trim();
+  const pick = pool.reduce(
+    (best, s) => (s.length > best.length ? s : best),
+    "",
+  );
+  const label = (pick || pkg).replace(/[_-]+/g, " ").trim();
   return label ? label.charAt(0).toUpperCase() + label.slice(1) : pkg;
 }
 
 /** Every launchable activity on the device, with the user's own apps first. */
 async function appList(bin, serial) {
-  const out = await adb(bin, ['-s', serial, 'shell', 'cmd', 'package', 'query-activities',
-    '--brief', '-a', 'android.intent.action.MAIN', '-c', 'android.intent.category.LAUNCHER']);
-  const components = [...new Set(out.match(/[a-zA-Z0-9_.]+\/[a-zA-Z0-9_.$]+/g) || [])];
+  const out = await adb(bin, [
+    "-s",
+    serial,
+    "shell",
+    "cmd",
+    "package",
+    "query-activities",
+    "--brief",
+    "-a",
+    "android.intent.action.MAIN",
+    "-c",
+    "android.intent.category.LAUNCHER",
+  ]);
+  const components = [
+    ...new Set(out.match(/[a-zA-Z0-9_.]+\/[a-zA-Z0-9_.$]+/g) || []),
+  ];
   let installed = new Set();
   try {
-    const listed = await adb(bin, ['-s', serial, 'shell', 'pm', 'list', 'packages', '-3']);
-    installed = new Set(listed.split(/\r?\n/)
-      .map((l) => l.replace('package:', '').trim()).filter(Boolean));
+    const listed = await adb(bin, [
+      "-s",
+      serial,
+      "shell",
+      "pm",
+      "list",
+      "packages",
+      "-3",
+    ]);
+    installed = new Set(
+      listed
+        .split(/\r?\n/)
+        .map((l) => l.replace("package:", "").trim())
+        .filter(Boolean),
+    );
   } catch (_) {
     /* ordering only */
   }
@@ -280,37 +381,52 @@ async function appList(bin, serial) {
       const pkg = packageOf(component);
       return { component, pkg, name: appName(pkg), user: installed.has(pkg) };
     })
-    .sort((a, b) => Number(b.user) - Number(a.user) || a.name.localeCompare(b.name));
+    .sort(
+      (a, b) => Number(b.user) - Number(a.user) || a.name.localeCompare(b.name),
+    );
 }
 
 /** `androidPanel.package` may name a component (`pkg/activity`); this is the package half. */
 function packageOf(spec) {
-  return spec.split('/')[0];
+  return spec.split("/")[0];
 }
 
 /** Finds a package's launcher activity. Starting it on a virtual display needs the component name. */
 async function launcherActivity(bin, serial, pkg) {
   const out = await adb(bin, [
-    '-s', serial, 'shell', 'cmd', 'package', 'resolve-activity',
-    '--brief', '-c', 'android.intent.category.LAUNCHER', pkg,
+    "-s",
+    serial,
+    "shell",
+    "cmd",
+    "package",
+    "resolve-activity",
+    "--brief",
+    "-c",
+    "android.intent.category.LAUNCHER",
+    pkg,
   ]);
-  const line = out.split(/\r?\n/).map((s) => s.trim()).filter(Boolean).pop();
-  return line && line.includes('/') ? line : null;
+  const line = out
+    .split(/\r?\n/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .pop();
+  return line && line.includes("/") ? line : null;
 }
 
 /** Reads the real screen resolution from the PNG header, to map clicks back in screencap mode. */
 function pngSize(buf) {
-  if (!buf || buf.length < 24 || buf.readUInt32BE(0) !== 0x89504e47) return null;
+  if (!buf || buf.length < 24 || buf.readUInt32BE(0) !== 0x89504e47)
+    return null;
   return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) };
 }
 
 /** Escapes a value for an HTML attribute. Translated text is text, never markup. */
 function esc(s) {
   return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 /**
@@ -320,8 +436,12 @@ function esc(s) {
  */
 async function inputCaps(bin, serial) {
   try {
-    const out = await adb(bin, ['-s', serial, 'shell',
-      'getprop ro.build.version.sdk; input 2>&1 | grep -c -w scroll; true']);
+    const out = await adb(bin, [
+      "-s",
+      serial,
+      "shell",
+      "getprop ro.build.version.sdk; input 2>&1 | grep -c -w scroll; true",
+    ]);
     const [sdk, scroll] = out.split(/\r?\n/).map((l) => parseInt(l, 10));
     if (!Number.isFinite(sdk)) return null;
     return { motionevent: sdk >= 29, cancel: sdk >= 31, scroll: scroll > 0 };
@@ -339,11 +459,13 @@ const LEGACY_INPUT = { motionevent: false, cancel: false, scroll: false };
 const WHEEL_DRAG = 0.07;
 const MIN_WHEEL_DRAG = 64;
 
-const TOUCH_EDGES = { down: 'DOWN', move: 'MOVE', up: 'UP', cancel: 'CANCEL' };
+const TOUCH_EDGES = { down: "DOWN", move: "MOVE", up: "UP", cancel: "CANCEL" };
 
 /** Adds one wheel event to another that is still waiting to be sent. */
 function addScroll(a, b) {
-  return a ? Object.assign({}, b, { dx: a.dx + b.dx, dy: a.dy + b.dy }) : Object.assign({}, b);
+  return a
+    ? Object.assign({}, b, { dx: a.dx + b.dx, dy: a.dy + b.dy })
+    : Object.assign({}, b);
 }
 
 /**
@@ -358,36 +480,48 @@ function addScroll(a, b) {
  * replayed on release. An empty list means there is nothing to send for this event.
  */
 function adbInputCommands(m, displayId, caps, gesture) {
-  const d = displayId === null || displayId === undefined ? '' : ` -d ${displayId}`;
+  const d =
+    displayId === null || displayId === undefined ? "" : ` -d ${displayId}`;
   const n = (v) => (Number.isFinite(v) ? Math.round(v) : null);
-  const x = n(m.x), y = n(m.y);
+  const x = n(m.x),
+    y = n(m.y);
   if (x === null || y === null) return [];
 
-  if (m.type === 'touch') {
+  if (m.type === "touch") {
     if (!Object.prototype.hasOwnProperty.call(TOUCH_EDGES, m.action)) return [];
     // A gesture keeps the way it started, even if the device's abilities come in meanwhile.
-    if (m.action === 'down') gesture.press = { x, y, t: Date.now(), motion: caps.motionevent, moved: false };
+    if (m.action === "down")
+      gesture.press = {
+        x,
+        y,
+        t: Date.now(),
+        motion: caps.motionevent,
+        moved: false,
+      };
     const press = gesture.press;
     if (!press) return [];
-    const last = m.action === 'up' || m.action === 'cancel';
+    const last = m.action === "up" || m.action === "cancel";
     if (last) gesture.press = null;
     if (press.motion) {
       // Before Android 12 there is no CANCEL, and lifting is the only way to end the touch.
-      const edge = m.action === 'cancel' && !caps.cancel ? 'UP' : TOUCH_EDGES[m.action];
+      const edge =
+        m.action === "cancel" && !caps.cancel ? "UP" : TOUCH_EDGES[m.action];
       return [`input${d} motionevent ${edge} ${x} ${y}`];
     }
-    if (m.action === 'move') press.moved = true;
-    if (!last || m.action === 'cancel') return [];
+    if (m.action === "move") press.moved = true;
+    if (!last || m.action === "cancel") return [];
     if (!press.moved) return [`input${d} tap ${press.x} ${press.y}`];
     const ms = Math.min(2000, Math.max(100, Date.now() - press.t));
     return [`input${d} swipe ${press.x} ${press.y} ${x} ${y} ${ms}`];
   }
 
-  if (m.type === 'scroll') {
+  if (m.type === "scroll") {
     if (!Number.isFinite(m.dx) || !Number.isFinite(m.dy)) return [];
     if (caps.scroll) {
       // The source comes before -d; `input` reads its arguments in that order.
-      return [`input mouse${d} scroll ${x} ${y} --axis VSCROLL,${m.dy.toFixed(3)} --axis HSCROLL,${m.dx.toFixed(3)}`];
+      return [
+        `input mouse${d} scroll ${x} ${y} --axis VSCROLL,${m.dy.toFixed(3)} --axis HSCROLL,${m.dx.toFixed(3)}`,
+      ];
     }
     if (!(m.w > 0 && m.h > 0)) return [];
     const wheel = gesture.wheel || { dx: 0, dy: 0 };
@@ -396,15 +530,25 @@ function adbInputCommands(m, displayId, caps, gesture) {
     gesture.wheel = wheel;
     // Scrolling up moves the content down, which a finger does by dragging down.
     const step = Math.max(m.w, m.h) * WHEEL_DRAG;
-    const mx = -wheel.dx * step, my = wheel.dy * step;
+    const mx = -wheel.dx * step,
+      my = wheel.dy * step;
     if (Math.hypot(mx, my) < MIN_WHEEL_DRAG) return [];
     gesture.wheel = null;
     const clamp = (v, size) => Math.min(size - 1, Math.max(0, Math.round(v)));
-    const x2 = clamp(x + mx, m.w), y2 = clamp(y + my, m.h);
+    const x2 = clamp(x + mx, m.w),
+      y2 = clamp(y + my, m.h);
     if (caps.motionevent) {
       // Holding still at the end before lifting leaves the drag no speed to fling with.
       const me = (a, px, py) => `input${d} motionevent ${a} ${px} ${py}`;
-      return [[me('DOWN', x, y), me('MOVE', x2, y2), 'sleep 0.15', me('MOVE', x2, y2), me('UP', x2, y2)].join('; ')];
+      return [
+        [
+          me("DOWN", x, y),
+          me("MOVE", x2, y2),
+          "sleep 0.15",
+          me("MOVE", x2, y2),
+          me("UP", x2, y2),
+        ].join("; "),
+      ];
     }
     return [`input${d} swipe ${x} ${y} ${x2} ${y2} 400`];
   }
@@ -418,30 +562,36 @@ function adbInputCommands(m, displayId, caps, gesture) {
  * control characters are dropped. Ctrl+V's text is pasted whole, whatever it contains.
  */
 function typingOps(m) {
-  if (m.type === 'key') {
+  if (m.type === "key") {
     // Android key codes are small, and the meta state is a handful of flags; anything else
     // is not a key, and would not fit the 32-bit fields it is written into.
     if (!Number.isInteger(m.code) || m.code < 0 || m.code > 0xffff) return [];
-    const meta = Number.isInteger(m.meta) && m.meta >= 0 && m.meta <= 0x7fffffff ? m.meta : 0;
-    return [{ kind: 'key', code: m.code, meta: meta }];
+    const meta =
+      Number.isInteger(m.meta) && m.meta >= 0 && m.meta <= 0x7fffffff
+        ? m.meta
+        : 0;
+    return [{ kind: "key", code: m.code, meta: meta }];
   }
-  if (typeof m.text !== 'string') return [];
-  const text = m.text.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '');
+  if (typeof m.text !== "string") return [];
+  const text = m.text.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
   if (!text) return [];
-  if (m.type === 'paste') return [{ kind: 'paste', text: text.slice(0, PASTE_MAX_CHARS) }];
-  if (m.type !== 'text') return [];
+  if (m.type === "paste")
+    return [{ kind: "paste", text: text.slice(0, PASTE_MAX_CHARS) }];
+  if (m.type !== "text") return [];
   const ops = [];
-  for (const part of text.match(/\r\n|[\r\n\t]|[\x20-\x7e]+|[^\x20-\x7e\r\n\t]+/g)) {
-    if (part === '\t') {
-      ops.push({ kind: 'key', code: KEYCODE_TAB, meta: 0 });
-    } else if (part === '\n' || part === '\r' || part === '\r\n') {
-      ops.push({ kind: 'key', code: KEYCODE_ENTER, meta: 0 });
+  for (const part of text.match(
+    /\r\n|[\r\n\t]|[\x20-\x7e]+|[^\x20-\x7e\r\n\t]+/g,
+  )) {
+    if (part === "\t") {
+      ops.push({ kind: "key", code: KEYCODE_TAB, meta: 0 });
+    } else if (part === "\n" || part === "\r" || part === "\r\n") {
+      ops.push({ kind: "key", code: KEYCODE_ENTER, meta: 0 });
     } else if (/^[\x20-\x7e]/.test(part)) {
       for (let i = 0; i < part.length; i += INJECT_TEXT_MAX) {
-        ops.push({ kind: 'text', text: part.slice(i, i + INJECT_TEXT_MAX) });
+        ops.push({ kind: "text", text: part.slice(i, i + INJECT_TEXT_MAX) });
       }
     } else {
-      ops.push({ kind: 'paste', text: part });
+      ops.push({ kind: "paste", text: part });
     }
   }
   return ops;
@@ -453,16 +603,18 @@ function typingOps(m) {
  * Ctrl+A sent as a bare A would type an "a" instead of selecting.
  */
 function adbTypingCommand(op, displayId) {
-  const d = displayId === null || displayId === undefined ? '' : ` -d ${displayId}`;
-  if (op.kind === 'key') return op.meta ? null : `input${d} keyevent ${op.code}`;
-  if (op.kind !== 'text') return null;
+  const d =
+    displayId === null || displayId === undefined ? "" : ` -d ${displayId}`;
+  if (op.kind === "key")
+    return op.meta ? null : `input${d} keyevent ${op.code}`;
+  if (op.kind !== "text") return null;
   // `input text` reads %s as a space, the only way older versions take one; the quotes keep
   // the shell from reading anything in the text.
-  const arg = op.text.replace(/ /g, '%s').replace(/'/g, "'\\''");
+  const arg = op.text.replace(/ /g, "%s").replace(/'/g, "'\\''");
   return `input${d} text '${arg}'`;
 }
 
-const ACK = '__androidPanel_ack__';
+const ACK = "__androidPanel_ack__";
 // A shell that has not finished a command in this long is taken to be stuck, and replaced.
 const STALL_MS = 5000;
 
@@ -485,7 +637,7 @@ class InputShell {
     this.proc = null;
     this.running = 0;
     this.move = null;
-    this.tail = '';
+    this.tail = "";
     this.lastProgress = 0;
   }
 
@@ -495,22 +647,24 @@ class InputShell {
 
   ensure() {
     if (this.proc) return this.proc;
-    const proc = this.spawn(this.bin, ['-s', this.serial, 'shell'], { windowsHide: true });
-    proc.stdout.on('data', (d) => this.onOutput(String(d)));
+    const proc = this.spawn(this.bin, ["-s", this.serial, "shell"], {
+      windowsHide: true,
+    });
+    proc.stdout.on("data", (d) => this.onOutput(String(d)));
     // An `input` that fails complains on stderr. Left unread, that pipe fills, adb stops
     // forwarding anything, and every later command waits behind it for good.
-    proc.stderr.on('data', () => {});
-    proc.stdin.on('error', () => {});
+    proc.stderr.on("data", () => {});
+    proc.stdin.on("error", () => {});
     const gone = () => {
       if (this.proc !== proc) return;
       this.proc = null;
       this.running = 0;
       this.move = null;
     };
-    proc.on('exit', gone);
-    proc.on('error', gone);
+    proc.on("exit", gone);
+    proc.on("error", gone);
     this.proc = proc;
-    this.tail = '';
+    this.tail = "";
     return proc;
   }
 
@@ -557,8 +711,12 @@ class InputShell {
     this.running = 0;
     this.move = null;
     if (!proc) return;
-    try { proc.stdin.end(); } catch (_) {}
-    try { proc.kill(); } catch (_) {}
+    try {
+      proc.stdin.end();
+    } catch (_) {}
+    try {
+      proc.kill();
+    } catch (_) {}
   }
 }
 
@@ -568,7 +726,7 @@ class ScreenView {
     this.view = null;
     this.timer = null;
     this.serial = null;
-    this.lastHash = '';
+    this.lastHash = "";
     this.busy = false;
     this.stream = null;
     this.displayId = null; // virtual display; null means the device's own screen
@@ -608,7 +766,7 @@ class ScreenView {
       // with it. Glancing at another sidebar view should not throw away work in progress,
       // so the stream is left running.
       const c = config();
-      if (!(c.mode === 'stream' && c.keepAlive)) this.stop();
+      if (!(c.mode === "stream" && c.keepAlive)) this.stop();
     });
     view.onDidDispose(() => this.stop());
     if (view.visible) this.start();
@@ -619,7 +777,7 @@ class ScreenView {
   }
 
   status(text, kind) {
-    this.post({ type: 'status', text, kind: kind || 'info' });
+    this.post({ type: "status", text, kind: kind || "info" });
   }
 
   async start() {
@@ -629,26 +787,32 @@ class ScreenView {
     await ensureResolved();
     if (gen !== this.gen) return;
     const c = config();
-    this.status(t('Looking for a device…'));
+    this.status(t("Looking for a device…"));
     let serial;
     try {
       serial = c.serial || (await pickSerial(c.adb, c.pkg));
     } catch (_) {
       if (gen !== this.gen) return;
       this.started = false;
-      return this.status(t('Could not run adb. Check the path in the settings.'), 'error');
+      return this.status(
+        t("Could not run adb. Check the path in the settings."),
+        "error",
+      );
     }
     if (gen !== this.gen) return;
     this.serial = serial;
     if (!this.serial) {
       this.started = false;
-      return this.status(t('No device connected. Check the USB connection.'), 'error');
+      return this.status(
+        t("No device connected. Check the USB connection."),
+        "error",
+      );
     }
     this.mode = c.mode;
-    this.post({ type: 'mode', mode: c.mode });
+    this.post({ type: "mode", mode: c.mode });
     await this.wake(true);
     if (gen !== this.gen) return;
-    if (c.mode === 'stream') await this.startStream(c, gen);
+    if (c.mode === "stream") await this.startStream(c, gen);
     else this.startCapture();
   }
 
@@ -666,7 +830,8 @@ class ScreenView {
     }
     if (this.stream) {
       const gone = this.stream.scid;
-      this.stream.stop()
+      this.stream
+        .stop()
         .then(() => this.forget(gone))
         .catch(() => {});
       this.stream = null;
@@ -689,7 +854,10 @@ class ScreenView {
   async forget(scid) {
     const known = this.context.globalState.get(SCIDS_KEY, []);
     if (!known.includes(scid)) return;
-    await this.context.globalState.update(SCIDS_KEY, known.filter((s) => s !== scid));
+    await this.context.globalState.update(
+      SCIDS_KEY,
+      known.filter((s) => s !== scid),
+    );
   }
 
   // ---------- stream mode: virtual display + H.264 ----------
@@ -697,7 +865,10 @@ class ScreenView {
   async startStream(c, gen) {
     if (!c.serverPath) {
       this.started = false;
-      return this.status(t('The scrcpyServerPath setting is required.'), 'error');
+      return this.status(
+        t("The scrcpyServerPath setting is required."),
+        "error",
+      );
     }
     let version = c.version;
     if (!version) {
@@ -705,23 +876,38 @@ class ScreenView {
       if (gen !== this.gen) return;
       if (!version) {
         this.started = false;
-        return this.status(t('Could not determine the scrcpy version. Set scrcpyVersion manually.'), 'error');
+        return this.status(
+          t(
+            "Could not determine the scrcpy version. Set scrcpyVersion manually.",
+          ),
+          "error",
+        );
       }
     }
     // The stream and control formats spoken here are 4.x's. An older server frames the video
     // differently, and the result would be garbage rather than an error.
     if (parseInt(version, 10) < 4) {
       this.started = false;
-      return this.status(t('scrcpy {0} is too old. The panel needs scrcpy 4.0 or later.', version), 'error');
+      return this.status(
+        t(
+          "scrcpy {0} is too old. The panel needs scrcpy 4.0 or later.",
+          version,
+        ),
+        "error",
+      );
     }
     // "phone" mirrors the device's own screen; "app" gets a display of its own.
     let newDisplay = null;
-    if (c.show === 'app') {
-      newDisplay = c.newDisplay || (await deviceDisplaySpec(c.adb, this.serial));
+    if (c.show === "app") {
+      newDisplay =
+        c.newDisplay || (await deviceDisplaySpec(c.adb, this.serial));
       if (gen !== this.gen) return;
       if (!newDisplay) {
         this.started = false;
-        return this.status(t('Could not read the screen size. Set newDisplay instead.'), 'error');
+        return this.status(
+          t("Could not read the screen size. Set newDisplay instead."),
+          "error",
+        );
       }
     }
     const known = this.context.globalState.get(SCIDS_KEY, []);
@@ -744,42 +930,46 @@ class ScreenView {
     // Events from a stream this run has since let go of are not ours to act on.
     const live = () => this.stream === s;
 
-    s.on('display', async (id) => {
+    s.on("display", async (id) => {
       if (!live()) return;
       this.displayId = id;
       if (c.pkg) await this.launch();
     });
     // A new video size: at the start, and whenever the display rotates. The webview sends
     // input in pixels of the frames it shows, so it has to know which size is current.
-    s.on('session', (v) => {
+    s.on("session", (v) => {
       if (!live()) return;
       this.status(`${this.serial} · ${v.width}x${v.height}`);
-      this.post({ type: 'session', w: v.width, h: v.height });
+      this.post({ type: "session", w: v.width, h: v.height });
     });
-    s.on('packet', (p) => {
+    s.on("packet", (p) => {
       if (!live()) return;
       // A key frame answers any request for one, so the next request is a new one.
-      if (p.type !== 'delta') this.lastKeyFrameRequest = 0;
-      if (p.type === 'config') {
+      if (p.type !== "delta") this.lastKeyFrameRequest = 0;
+      if (p.type === "config") {
         this.configPacket = p.data;
-        this.post({ type: 'config', codec: codecStringFromConfig(p.data) });
+        this.post({ type: "config", codec: codecStringFromConfig(p.data) });
         return;
       }
       // The config packet is prepended to the key frame; a decoder handles it poorly alone.
       const body =
-        p.type === 'key' && this.configPacket
+        p.type === "key" && this.configPacket
           ? Buffer.concat([this.configPacket, p.data])
           : p.data;
-      this.post({ type: 'chunk', key: p.type === 'key', data: body.toString('base64') });
+      this.post({
+        type: "chunk",
+        key: p.type === "key",
+        data: body.toString("base64"),
+      });
     });
     // A logged error is worth showing, but it is not the end of the stream, so it must not
     // blank the picture the way a real failure does. 'closed' covers those.
-    s.on('log', (text) => {
-      if (live()) this.status(text.split('\n')[0].slice(0, 120), 'warn');
+    s.on("log", (text) => {
+      if (live()) this.status(text.split("\n")[0].slice(0, 120), "warn");
     });
-    s.on('closed', (why) => {
+    s.on("closed", (why) => {
       if (!this.started || !live()) return;
-      this.status(closeReason(why), 'error');
+      this.status(closeReason(why), "error");
       // Everything that belonged to this run goes with it: the health check would otherwise
       // keep polling, and a second one would join it on the next start.
       this.stop();
@@ -788,7 +978,9 @@ class ScreenView {
     // From here on stop() knows about the stream and stops it along with everything else.
     this.stream = s;
     // Written down before the server starts: one that dies in between is still ours to clean.
-    await this.context.globalState.update(SCIDS_KEY, [...new Set([...known, s.scid])]);
+    await this.context.globalState.update(SCIDS_KEY, [
+      ...new Set([...known, s.scid]),
+    ]);
     if (!live()) return;
 
     try {
@@ -800,13 +992,13 @@ class ScreenView {
       // left to remember. Without this the list would grow with every crash.
       await this.context.globalState.update(SCIDS_KEY, [s.scid]);
       if (!live()) return;
-      this.status(t('{0} · connecting…', this.serial));
+      this.status(t("{0} · connecting…", this.serial));
       this.warnIfLocked();
       // The display can vanish and the app can be pushed aside, so check in periodically.
       this.health = setInterval(() => this.healthCheck(), 8000);
     } catch (e) {
       if (!live()) return;
-      this.status(t('Could not start the stream: {0}', e.message), 'error');
+      this.status(t("Could not start the stream: {0}", e.message), "error");
       this.stop();
     }
   }
@@ -823,10 +1015,23 @@ class ScreenView {
     if (!c.wakeDevice || !this.serial) return;
     try {
       if (!unconditional) {
-        const power = await adb(c.adb, ['-s', this.serial, 'shell', 'dumpsys', 'power']);
-        if (power.indexOf('mWakefulness=Awake') >= 0) return;
+        const power = await adb(c.adb, [
+          "-s",
+          this.serial,
+          "shell",
+          "dumpsys",
+          "power",
+        ]);
+        if (power.indexOf("mWakefulness=Awake") >= 0) return;
       }
-      await adb(c.adb, ['-s', this.serial, 'shell', 'input', 'keyevent', KEY_WAKEUP]);
+      await adb(c.adb, [
+        "-s",
+        this.serial,
+        "shell",
+        "input",
+        "keyevent",
+        KEY_WAKEUP,
+      ]);
     } catch (_) {
       /* next round */
     }
@@ -848,19 +1053,33 @@ class ScreenView {
     if (gone() || this.displayId === null) return;
     const c = config();
     try {
-      const disp = await adb(c.adb, ['-s', this.serial, 'shell', 'dumpsys', 'display']);
+      const disp = await adb(c.adb, [
+        "-s",
+        this.serial,
+        "shell",
+        "dumpsys",
+        "display",
+      ]);
       if (gone()) return;
-      if (disp.indexOf('displayId=' + this.displayId + ',') < 0) {
-        this.status(t('The display disappeared; reconnecting.'), 'error');
+      if (disp.indexOf("displayId=" + this.displayId + ",") < 0) {
+        this.status(t("The display disappeared; reconnecting."), "error");
         this.stop();
         this.start();
         return;
       }
       if (!c.pkg) return;
-      const acts = await adb(c.adb, ['-s', this.serial, 'shell', 'dumpsys', 'activity', 'activities']);
+      const acts = await adb(c.adb, [
+        "-s",
+        this.serial,
+        "shell",
+        "dumpsys",
+        "activity",
+        "activities",
+      ]);
       if (gone()) return;
-      const at = acts.indexOf('Display #' + this.displayId + ' ');
-      if (at >= 0 && acts.slice(at, at + 800).indexOf(packageOf(c.pkg)) < 0) await this.launch();
+      const at = acts.indexOf("Display #" + this.displayId + " ");
+      if (at >= 0 && acts.slice(at, at + 800).indexOf(packageOf(c.pkg)) < 0)
+        await this.launch();
     } catch (_) {
       /* look again next round */
     }
@@ -869,7 +1088,7 @@ class ScreenView {
   // ---------- screencap mode: polling the device's own screen ----------
 
   startCapture() {
-    this.lastHash = '';
+    this.lastHash = "";
     this.status(this.serial);
     const c = config();
     // Until the answer is in, input is sent the way every Android version understands.
@@ -884,7 +1103,10 @@ class ScreenView {
 
   schedule(delay) {
     if (this.timer) clearTimeout(this.timer);
-    this.timer = setTimeout(() => this.tick(), delay === undefined ? config().interval : delay);
+    this.timer = setTimeout(
+      () => this.tick(),
+      delay === undefined ? config().interval : delay,
+    );
   }
 
   /**
@@ -892,30 +1114,42 @@ class ScreenView {
    * lag. The short delay gives the app a moment to draw its response first.
    */
   captureSoon() {
-    if (this.mode !== 'screencap') return;
-    this.lastHash = '';
+    if (this.mode !== "screencap") return;
+    this.lastHash = "";
     if (this.busy) this.hurry = true;
     else if (this.started) this.schedule(AFTER_INPUT_MS);
   }
 
   async tick() {
-    if (!this.started || this.mode !== 'screencap') return;
+    if (!this.started || this.mode !== "screencap") return;
     if (this.busy) return this.schedule();
     this.busy = true;
     try {
       const c = config();
-      const png = await adb(c.adb, ['-s', this.serial, 'exec-out', 'screencap', '-p'], { binary: true });
+      const png = await adb(
+        c.adb,
+        ["-s", this.serial, "exec-out", "screencap", "-p"],
+        { binary: true },
+      );
       const size = pngSize(png);
-      if (!size) throw new Error('could not read the screen');
+      if (!size) throw new Error("could not read the screen");
       // A mostly-text screen rarely changes, so only send what actually differs.
-      const hash = crypto.createHash('sha1').update(png).digest('hex');
+      const hash = crypto.createHash("sha1").update(png).digest("hex");
       if (hash !== this.lastHash) {
         this.lastHash = hash;
-        this.post({ type: 'frame', data: png.toString('base64'), w: size.w, h: size.h });
+        this.post({
+          type: "frame",
+          data: png.toString("base64"),
+          w: size.w,
+          h: size.h,
+        });
       }
     } catch (_) {
-      this.lastHash = '';
-      this.status(t('Could not read the screen. Check the device connection.'), 'error');
+      this.lastHash = "";
+      this.status(
+        t("Could not read the screen. Check the device connection."),
+        "error",
+      );
     } finally {
       this.busy = false;
       const hurry = this.hurry;
@@ -932,8 +1166,9 @@ class ScreenView {
     const now = Date.now();
     const idle = now - this.lastInput;
     this.lastInput = now;
-    const keyboard = m.type === 'key' || m.type === 'text' || m.type === 'paste';
-    if (this.mode === 'stream') {
+    const keyboard =
+      m.type === "key" || m.type === "text" || m.type === "paste";
+    if (this.mode === "stream") {
       if (!this.stream) return;
       if (keyboard) this.type(typingOps(m));
       else this.inputViaControl(m);
@@ -951,9 +1186,12 @@ class ScreenView {
   inputViaControl(m) {
     const s = this.stream;
     try {
-      if (m.type === 'touch' && Object.prototype.hasOwnProperty.call(ACTION, m.action)) {
+      if (
+        m.type === "touch" &&
+        Object.prototype.hasOwnProperty.call(ACTION, m.action)
+      ) {
         s.control(touchMessage(ACTION[m.action], m));
-      } else if (m.type === 'scroll') {
+      } else if (m.type === "scroll") {
         s.control(scrollMessage(m, m.dx, m.dy));
       }
     } catch (_) {
@@ -981,12 +1219,12 @@ class ScreenView {
         return;
       }
       const op = this.typing.shift();
-      if (op.kind === 'key') {
+      if (op.kind === "key") {
         s.control(keyMessage(ACTION.down, op.code, 0, op.meta));
         s.control(keyMessage(ACTION.up, op.code, 0, op.meta));
-      } else if (op.kind === 'text') {
+      } else if (op.kind === "text") {
         s.control(textMessage(op.text));
-      } else if (op.kind === 'paste') {
+      } else if (op.kind === "paste") {
         s.control(clipboardMessage(op.text, true));
         this.typingTimer = setTimeout(() => this.drainTyping(), PASTE_GAP_MS);
         return;
@@ -1001,17 +1239,26 @@ class ScreenView {
    */
   typeViaAdb(m, idle) {
     const c = config();
-    if (!this.shell) this.shell = new InputShell(c.adb, this.serial, () => this.flushScroll());
+    if (!this.shell)
+      this.shell = new InputShell(c.adb, this.serial, () => this.flushScroll());
     this.flushScroll();
-    const ops = typingOps(m.type === 'paste' ? { type: 'text', text: m.text } : m);
+    const ops = typingOps(
+      m.type === "paste" ? { type: "text", text: m.text } : m,
+    );
     const cmds = ops.map((op) => adbTypingCommand(op, this.displayId));
     if (cmds.some((cmd) => cmd === null) && !this.warnedTyping) {
       this.warnedTyping = true;
-      this.status(t('Screencap mode can only type plain ASCII text and keys without modifiers.'), 'warn');
+      this.status(
+        t(
+          "Screencap mode can only type plain ASCII text and keys without modifiers.",
+        ),
+        "warn",
+      );
     }
     const run = cmds.filter(Boolean);
     if (!run.length) return;
-    if (c.wakeDevice && idle > IDLE_WAKE_MS) this.shell.run(`input keyevent ${KEY_WAKEUP}`);
+    if (c.wakeDevice && idle > IDLE_WAKE_MS)
+      this.shell.run(`input keyevent ${KEY_WAKEUP}`);
     for (const cmd of run) this.shell.run(cmd);
     this.captureSoon();
   }
@@ -1019,12 +1266,13 @@ class ScreenView {
   /** Screencap mode, which has no scrcpy server and so no control socket. */
   inputViaAdb(m, idle) {
     const c = config();
-    if (!this.shell) this.shell = new InputShell(c.adb, this.serial, () => this.flushScroll());
+    if (!this.shell)
+      this.shell = new InputShell(c.adb, this.serial, () => this.flushScroll());
     const sh = this.shell;
     // A wheel turns faster than `input` can keep up with. While the shell is busy the turns
     // are added up and go as one scroll once it is free, instead of queueing one by one and
     // holding up whatever comes after them.
-    if (m.type === 'scroll') {
+    if (m.type === "scroll") {
       if (sh.busy) {
         this.pendingScroll = addScroll(this.pendingScroll, m);
         return;
@@ -1032,24 +1280,39 @@ class ScreenView {
     } else {
       this.flushScroll(); // a scroll made before this event still goes first
     }
-    const cmds = adbInputCommands(m, this.displayId, this.inputCaps || LEGACY_INPUT, this.gesture);
+    const cmds = adbInputCommands(
+      m,
+      this.displayId,
+      this.inputCaps || LEGACY_INPUT,
+      this.gesture,
+    );
     if (!cmds.length) return;
-    if (m.type === 'touch' && m.action === 'move') return sh.runMove(cmds[0]);
-    if (m.type === 'touch') sh.dropMove();
+    if (m.type === "touch" && m.action === "move") return sh.runMove(cmds[0]);
+    if (m.type === "touch") sh.dropMove();
     // Nothing checks on the device between captures, so a gesture that starts after a long
     // quiet spell wakes it first. On an awake device the key does nothing.
-    if (c.wakeDevice && (m.type !== 'touch' || m.action === 'down') && idle > IDLE_WAKE_MS) {
+    if (
+      c.wakeDevice &&
+      (m.type !== "touch" || m.action === "down") &&
+      idle > IDLE_WAKE_MS
+    ) {
       sh.run(`input keyevent ${KEY_WAKEUP}`);
     }
     for (const cmd of cmds) sh.run(cmd);
-    if (m.type !== 'touch' || m.action === 'up' || m.action === 'cancel') this.captureSoon();
+    if (m.type !== "touch" || m.action === "up" || m.action === "cancel")
+      this.captureSoon();
   }
 
   flushScroll() {
     const m = this.pendingScroll;
     if (!m || !this.shell) return;
     this.pendingScroll = null;
-    const cmds = adbInputCommands(m, this.displayId, this.inputCaps || LEGACY_INPUT, this.gesture);
+    const cmds = adbInputCommands(
+      m,
+      this.displayId,
+      this.inputCaps || LEGACY_INPUT,
+      this.gesture,
+    );
     for (const cmd of cmds) this.shell.run(cmd);
     if (cmds.length) this.captureSoon();
   }
@@ -1073,20 +1336,35 @@ class ScreenView {
       if (this.displayId !== null) {
         // A home app carries no LAUNCHER category, so resolve-activity finds nothing for it.
         // Naming the activity outright is the only way to start one on a virtual display.
-        const comp = c.pkg.indexOf('/') >= 0
-          ? c.pkg
-          : await launcherActivity(c.adb, this.serial, c.pkg);
+        const comp =
+          c.pkg.indexOf("/") >= 0
+            ? c.pkg
+            : await launcherActivity(c.adb, this.serial, c.pkg);
         if (comp) {
           await adb(c.adb, [
-            '-s', this.serial, 'shell', 'am', 'start',
-            '--display', String(this.displayId), '-n', comp,
+            "-s",
+            this.serial,
+            "shell",
+            "am",
+            "start",
+            "--display",
+            String(this.displayId),
+            "-n",
+            comp,
           ]);
           return;
         }
       }
       await adb(c.adb, [
-        '-s', this.serial, 'shell', 'monkey', '-p', packageOf(c.pkg),
-        '-c', 'android.intent.category.LAUNCHER', '1',
+        "-s",
+        this.serial,
+        "shell",
+        "monkey",
+        "-p",
+        packageOf(c.pkg),
+        "-c",
+        "android.intent.category.LAUNCHER",
+        "1",
       ]);
     } catch (_) {
       /* ignore */
@@ -1099,19 +1377,24 @@ class ScreenView {
    */
   async warnIfLocked() {
     const c = config();
-    if (c.show !== 'phone' || !this.serial || !this.started) return false;
+    if (c.show !== "phone" || !this.serial || !this.started) return false;
     if (!(await isLocked(c.adb, this.serial))) return false;
-    this.status(t('The device is locked, so only the lock screen is mirrored. Unlock it on the device, or set androidPanel.show to app.'), 'warn');
+    this.status(
+      t(
+        "The device is locked, so only the lock screen is mirrored. Unlock it on the device, or set androidPanel.show to app.",
+      ),
+      "warn",
+    );
     return true;
   }
 
   async sendApps() {
-    if (!this.serial) return this.post({ type: 'apps', list: [] });
+    if (!this.serial) return this.post({ type: "apps", list: [] });
     const c = config();
     try {
-      this.post({ type: 'apps', list: await appList(c.adb, this.serial) });
+      this.post({ type: "apps", list: await appList(c.adb, this.serial) });
     } catch (_) {
-      this.post({ type: 'apps', list: [] });
+      this.post({ type: "apps", list: [] });
     }
   }
 
@@ -1122,41 +1405,43 @@ class ScreenView {
     try {
       // Remember it before starting it. The health check relaunches whatever the setting
       // names, so leaving the old value in place lets it undo this within its next round.
-      await vscode.workspace.getConfiguration('androidPanel')
-        .update('package', component, vscode.ConfigurationTarget.Global);
-      const args = ['-s', this.serial, 'shell', 'am', 'start'];
-      if (this.displayId !== null) args.push('--display', String(this.displayId));
-      await adb(c.adb, [...args, '-n', component]);
+      await vscode.workspace
+        .getConfiguration("androidPanel")
+        .update("package", component, vscode.ConfigurationTarget.Global);
+      const args = ["-s", this.serial, "shell", "am", "start"];
+      if (this.displayId !== null)
+        args.push("--display", String(this.displayId));
+      await adb(c.adb, [...args, "-n", component]);
       // It started, but behind the keyguard nothing of it can be seen.
       await this.warnIfLocked();
     } catch (_) {
       // The stream is still up and showing what it showed, so this must not blank it.
-      this.status(t('Could not start {0}', component), 'warn');
+      this.status(t("Could not start {0}", component), "warn");
     }
   }
 
   onMessage(m) {
     switch (m.type) {
-      case 'touch':
-      case 'scroll':
-      case 'key':
-      case 'text':
-      case 'paste':
+      case "touch":
+      case "scroll":
+      case "key":
+      case "text":
+      case "paste":
         this.input(m);
         break;
-      case 'need-key':
+      case "need-key":
         this.requestKeyFrame();
         break;
-      case 'launch':
+      case "launch":
         this.launch();
         break;
-      case 'apps':
+      case "apps":
         this.sendApps();
         break;
-      case 'start':
+      case "start":
         this.startApp(m.component);
         break;
-      case 'reconnect':
+      case "reconnect":
         this.stop();
         this.start();
         break;
@@ -1164,34 +1449,36 @@ class ScreenView {
   }
 
   html() {
-    const nonce = crypto.randomBytes(16).toString('base64');
+    const nonce = crypto.randomBytes(16).toString("base64");
     // The webview cannot reach l10n.t, so the text is translated here and handed over.
     const ui = {
-      back: t('Back'),
-      home: t('Home'),
-      launch: t('Launch app'),
-      reconnect: t('Reconnect'),
-      fit: t('Fit to width / show all'),
-      apps: t('Choose an app'),
-      search: t('Search'),
-      noApps: t('No apps found'),
-      loading: t('Reading the app list…'),
-      waiting: t('Waiting for the device screen…'),
-      noWebCodecs: t('This editor does not support WebCodecs. Change mode to screencap in the settings.'),
-      decodeError: t('Decoding error: {0}'),
-      typing: t('Type on the device'),
-      close: t('Close'),
+      back: t("Back"),
+      home: t("Home"),
+      launch: t("Launch app"),
+      reconnect: t("Reconnect"),
+      fit: t("Fit to width / show all"),
+      apps: t("Choose an app"),
+      search: t("Search"),
+      noApps: t("No apps found"),
+      loading: t("Reading the app list…"),
+      waiting: t("Waiting for the device screen…"),
+      noWebCodecs: t(
+        "This editor does not support WebCodecs. Change mode to screencap in the settings.",
+      ),
+      decodeError: t("Decoding error: {0}"),
+      typing: t("Type on the device"),
+      close: t("Close"),
     };
     // Keep '<' out of the JSON so no translation can close the script tag early.
-    const uiJson = JSON.stringify(ui).replace(/</g, '\\u003c');
+    const uiJson = JSON.stringify(ui).replace(/</g, "\\u003c");
     const csp = [
       "default-src 'none'",
-      'img-src data:',
+      "img-src data:",
       "style-src 'unsafe-inline'",
       `script-src 'nonce-${nonce}'`,
-    ].join('; ');
+    ].join("; ");
     return `<!DOCTYPE html>
-<html lang="${esc(vscode.env.language || 'en')}">
+<html lang="${esc(vscode.env.language || "en")}">
 <head>
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="${csp}">
@@ -1519,6 +1806,15 @@ class ScreenView {
   let finger = null, pendingMove = null, moveQueued = false;
 
   function press(e) {
+    // IMPLEMENT: Capture Right-Click to perform BACK action.
+    if (e.button === 2) {
+      vs.postMessage({ type: 'key', code: 4 });
+      return;
+    } else if (e.button === 3) { 
+      vs.postMessage({ type: 'key', code: 187 });
+      return;
+    }
+
     if (e.button !== 0) return;
     // Clicking the screen is also how the keyboard gets to the device (see below). The
     // default focus change is prevented with the press, so the focus moves here instead.
@@ -1585,6 +1881,7 @@ class ScreenView {
   }
 
   [canvas, shot].forEach((el) => {
+    el.addEventListener('contextmenu', (e) => e.preventDefault()); // Prevent showing context-menu.
     el.addEventListener('pointerdown', press);
     el.addEventListener('pointermove', drag);
     el.addEventListener('pointerup', lift);
@@ -1756,12 +2053,14 @@ function activate(context) {
       // Keeping the decoder's state means no wait for a key frame when the view reopens.
       webviewOptions: { retainContextWhenHidden: true },
     }),
-    vscode.commands.registerCommand('androidPanel.launch', () => provider.launch()),
-    vscode.commands.registerCommand('androidPanel.reconnect', () => {
+    vscode.commands.registerCommand("androidPanel.launch", () =>
+      provider.launch(),
+    ),
+    vscode.commands.registerCommand("androidPanel.reconnect", () => {
       provider.stop();
       provider.start();
     }),
-    { dispose: () => provider.stop() }
+    { dispose: () => provider.stop() },
   );
 }
 
@@ -1770,5 +2069,12 @@ function deactivate() {}
 module.exports = {
   activate,
   deactivate,
-  _test: { adbInputCommands, addScroll, InputShell, LEGACY_INPUT, typingOps, adbTypingCommand },
+  _test: {
+    adbInputCommands,
+    addScroll,
+    InputShell,
+    LEGACY_INPUT,
+    typingOps,
+    adbTypingCommand,
+  },
 };
